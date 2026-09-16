@@ -1,0 +1,134 @@
+<?php
+defined('BASEPATH') or exit('No direct script access allowed');
+
+/**
+ * Admin commission: statements list, generate, approve (maker-checker), pay,
+ * rules management. All state changes audited via Perfex activity where available.
+ */
+class Commission extends AdminController
+{
+    public function __construct()
+    {
+        parent::__construct();
+        $this->load->model('payplex_commission/payplex_commission_model', 'cmodel');
+    }
+
+    private function cap($c)
+    {
+        return is_admin() || staff_can($c, 'payplex_commission');
+    }
+
+    public function index()
+    {
+        if (!$this->cap('view_all')) {
+            access_denied('payplex_commission');
+        }
+        $data['title']       = 'Commission Statements';
+        $data['statements']  = $this->cmodel->all($this->input->get('status') ?: null);
+        $data['can_approve'] = $this->cap('approve');
+        $data['can_pay']     = $this->cap('pay');
+        $data['can_compute'] = $this->cap('compute');
+        $this->load->view('payplex_commission/statements', $data);
+    }
+
+    /**
+     * Generate DRAFT statements for a period from converted-lead invoices.
+     * Source selection is intentionally simple + documented; BD-02 refines it.
+     */
+    public function generate()
+    {
+        if (!$this->cap('compute')) {
+            ajax_access_denied();
+        }
+        $period = $this->input->post('period') ?: date('Y-m');
+        // [VERIFY-ON-ACCESS] Real source = paid invoices tied to a staff owner in the period.
+        // Here we scaffold from Perfex invoices grouped by their sale agent if present.
+        $rows = $this->db->query(
+            "SELECT sale_agent AS staff_id, id AS invoice_id, total AS base
+             FROM " . db_prefix() . "invoices
+             WHERE status = 2 AND sale_agent > 0 AND DATE_FORMAT(date, '%Y-%m') = ?",
+            [$period]
+        )->result();
+
+        $byStaff = [];
+        foreach ($rows as $r) {
+            $byStaff[(int) $r->staff_id][] = ['type' => 'invoice', 'id' => (int) $r->invoice_id, 'base' => (float) $r->base, 'achieved_pct' => 0];
+        }
+        $currency = get_option('payplex_commission_currency') ?: 'INR';
+        $count = 0;
+        foreach ($byStaff as $staffId => $sources) {
+            // Skip if a non-superseded statement already exists for this staff+period.
+            $exists = $this->db->where('staff_id', $staffId)->where('period', $period)
+                ->where_not_in('status', ['superseded', 'draft'])->count_all_results(db_prefix() . 'payplex_commission_statements');
+            if ($exists) { continue; }
+            $this->cmodel->computeDraft($staffId, $period, $sources, $currency);
+            $count++;
+        }
+        set_alert('success', "Generated {$count} statement(s) for {$period} (pending approval).");
+        redirect(admin_url('payplex_commission/commission'));
+    }
+
+    public function view($id)
+    {
+        if (!$this->cap('view_all')) { access_denied('payplex_commission'); }
+        $data['s']     = $this->cmodel->get($id);
+        if (!$data['s']) { show_404(); }
+        $data['items'] = $this->cmodel->itemsFor($id);
+        $data['integrity'] = $this->cmodel->verifyIntegrity($id);
+        $data['can_approve'] = $this->cap('approve');
+        $data['can_pay']     = $this->cap('pay');
+        $data['title'] = 'Statement #' . (int) $id;
+        $this->load->view('payplex_commission/statement_view', $data);
+    }
+
+    public function approve($id)
+    {
+        if (!$this->cap('approve')) { ajax_access_denied(); }
+        $res = $this->cmodel->approve($id, get_staff_user_id());
+        if ($res !== true) {
+            $map = [
+                'not_found' => 'Not found', 'not_pending' => 'Not awaiting approval',
+                'maker_is_checker' => 'You cannot approve a statement you generated (segregation of duties).',
+                'race_lost' => 'Already processed.',
+            ];
+            set_alert('warning', $map[$res] ?? 'Could not approve.');
+        } else {
+            set_alert('success', 'Statement approved and locked (immutable).');
+        }
+        redirect(admin_url('payplex_commission/commission/view/' . (int) $id));
+    }
+
+    public function pay($id)
+    {
+        if (!$this->cap('pay')) { ajax_access_denied(); }
+        $res = $this->cmodel->markPaid($id, get_staff_user_id());
+        set_alert($res === true ? 'success' : 'warning', $res === true ? 'Marked paid.' : 'Only approved statements can be paid.');
+        redirect(admin_url('payplex_commission/commission/view/' . (int) $id));
+    }
+
+    public function rules()
+    {
+        if (!$this->cap('rules')) { access_denied('payplex_commission'); }
+        if ($this->input->post('rule_json')) {
+            $json = $this->input->post('rule_json', false);
+            if (json_decode($json) === null) {
+                set_alert('warning', 'Rule JSON is invalid.');
+            } else {
+                $this->db->insert(db_prefix() . 'payplex_commission_rule_versions', [
+                    'name'       => $this->input->post('name') ?: 'Rule',
+                    'scope'      => $this->input->post('scope') ?: 'global',
+                    'scope_ref'  => $this->input->post('scope_ref') ?: null,
+                    'rule_json'  => $json,
+                    'active'     => 1,
+                    'created_by' => get_staff_user_id(),
+                    'created_at' => date('Y-m-d H:i:s'),
+                ]);
+                set_alert('success', 'New rule version saved (old versions kept for historical statements).');
+            }
+            redirect(admin_url('payplex_commission/commission/rules'));
+        }
+        $data['title'] = 'Commission Rules';
+        $data['rules'] = $this->db->order_by('id', 'DESC')->get(db_prefix() . 'payplex_commission_rule_versions')->result();
+        $this->load->view('payplex_commission/rules', $data);
+    }
+}

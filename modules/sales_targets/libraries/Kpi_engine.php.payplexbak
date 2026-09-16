@@ -1,0 +1,271 @@
+<?php
+
+defined('BASEPATH') or exit('No direct script access allowed');
+
+/**
+ * Phase 3 — Sales Targets KPI Calculation Engine.
+ *
+ * Implements documented, reconciling calculators for the KPIs that have a
+ * real, native data source in this Perfex install (per the Phase 1 audit
+ * and the user's Phase 3 scope decision: converted_leads, gross_billed_revenue,
+ * amount_collected). Every other KPI in the plan document's list of 23 has
+ * no native Perfex data source (e.g. no tblcalls table exists) and is
+ * intentionally NOT implemented here — per the plan's explicit instruction
+ * to "start with native Perfex data that actually exists; mark unavailable
+ * sources instead of fabricating values."
+ *
+ * Two of the three calculators deliberately mirror the exact, already-proven
+ * SQL used by Perfex's own native Goals module
+ * (modules/goals/models/Goals_model.php::calculate_goal_achievement(),
+ * goal_type 1 and 8) rather than inventing new logic, for consistency with
+ * a pattern already tested in this codebase. converted_leads adopts the
+ * same proven definition Goals uses (goal_type 2): status = 1 AND a real
+ * tblclients row exists for the lead, which is stricter — and more
+ * reconciling — than the Phase 1/2 implementation's plain date_converted
+ * check. gross_billed_revenue adds one explicit rule beyond what Goals does:
+ * excluding Cancelled/Draft invoices, per the plan document's explicit
+ * "gross billed revenue uses approved invoice value, excluding
+ * cancelled/void invoices."
+ *
+ * Every calculator returns the exact contributing record IDs alongside the
+ * achieved total, so every displayed number can drill down to its source
+ * records (Phase 3 acceptance criterion) and no calculator can silently
+ * double-count: each KPI has exactly one query, one qualifying condition,
+ * and one date field, documented inline below.
+ */
+class Kpi_engine
+{
+    /** @var CI_Controller */
+    private $CI;
+
+    /**
+     * Invoice statuses to exclude from "billed" revenue.
+     * Invoices_model::STATUS_CANCELLED = 5, STATUS_DRAFT = 6
+     * (confirmed directly from application/models/Invoices_model.php on
+     * this install — a draft was never actually sent/billed, a cancelled
+     * invoice was voided).
+     */
+    const INVOICE_EXCLUDED_STATUSES = array(5, 6);
+
+    public function __construct()
+    {
+        $this->CI = &get_instance();
+    }
+
+    /**
+     * The only KPI keys this engine can calculate from real data right now.
+     */
+    public static function supported_kpis()
+    {
+        return array('converted_leads', 'gross_billed_revenue', 'amount_collected');
+    }
+
+    public function is_supported($kpi_key)
+    {
+        return in_array($kpi_key, self::supported_kpis(), true);
+    }
+
+    /**
+     * Dispatch. Always returns an array with keys:
+     *   achieved (float|null), record_count (int), record_ids (array),
+     *   source_table (string), unavailable (bool), reason (string, only if unavailable)
+     *
+     * For an unsupported/unavailable KPI this returns unavailable => true
+     * and achieved => null rather than fabricating a value — per the plan's
+     * explicit instruction.
+     */
+    public function calculate($kpi_key, $staff_id, $period_start, $period_end)
+    {
+        switch ($kpi_key) {
+            case 'converted_leads':
+                return $this->calculate_converted_leads($staff_id, $period_start, $period_end);
+            case 'gross_billed_revenue':
+                return $this->calculate_gross_billed_revenue($staff_id, $period_start, $period_end);
+            case 'amount_collected':
+                return $this->calculate_amount_collected($staff_id, $period_start, $period_end);
+            default:
+                return array(
+                    'achieved'     => null,
+                    'record_count' => 0,
+                    'record_ids'   => array(),
+                    'source_table' => null,
+                    'unavailable'  => true,
+                    'reason'       => 'No native Perfex data source exists on this install for KPI "' . $kpi_key . '".',
+                );
+        }
+    }
+
+    /**
+     * KPI: converted_leads
+     * Source table: tblleads
+     * Qualifying condition: status = 1 (Converted) AND a tblclients row
+     *   exists referencing the lead (proof a client record was actually
+     *   created, not just a status flag) AND staff attribution follows
+     *   Perfex's own rule (assigned; falls back to addedfrom when assigned=0).
+     * Date field: DATE(date_converted)
+     * Mirrors: modules/goals/models/Goals_model.php, goal_type == 2.
+     */
+    private function calculate_converted_leads($staff_id, $period_start, $period_end)
+    {
+        $p = db_prefix();
+
+        $sql = "SELECT {$p}leads.id AS id
+                FROM {$p}leads
+                WHERE DATE(date_converted) BETWEEN ? AND ?
+                AND status = 1
+                AND {$p}leads.id IN (SELECT leadid FROM {$p}clients WHERE leadid = {$p}leads.id)
+                AND CASE WHEN assigned = 0 THEN addedfrom = ? ELSE assigned = ? END";
+
+        $rows = $this->CI->db->query($sql, array($period_start, $period_end, $staff_id, $staff_id))->result_array();
+        $ids = array_column($rows, 'id');
+
+        return array(
+            'achieved'     => (float) count($ids),
+            'record_count' => count($ids),
+            'record_ids'   => $ids,
+            'source_table' => $p . 'leads',
+            'unavailable'  => false,
+        );
+    }
+
+    /**
+     * KPI: gross_billed_revenue
+     * Source table: tblinvoices
+     * Qualifying condition: sale_agent = staff AND status NOT IN (Cancelled, Draft)
+     * Date field: date
+     */
+    private function calculate_gross_billed_revenue($staff_id, $period_start, $period_end)
+    {
+        $p = db_prefix();
+
+        $this->CI->db->select('id, total');
+        $this->CI->db->from($p . 'invoices');
+        $this->CI->db->where('sale_agent', $staff_id);
+        $this->CI->db->where('date >=', $period_start);
+        $this->CI->db->where('date <=', $period_end);
+        $this->CI->db->where_not_in('status', self::INVOICE_EXCLUDED_STATUSES);
+        $rows = $this->CI->db->get()->result_array();
+
+        $total = 0.0;
+        $ids = array();
+        foreach ($rows as $row) {
+            $total += (float) $row['total'];
+            $ids[] = (int) $row['id'];
+        }
+
+        return array(
+            'achieved'     => $total,
+            'record_count' => count($ids),
+            'record_ids'   => $ids,
+            'source_table' => $p . 'invoices',
+            'unavailable'  => false,
+        );
+    }
+
+    /**
+     * KPI: amount_collected
+     * Source table: tblinvoicepaymentrecords (joined to tblinvoices, since
+     *   payment records carry no staff column of their own — attribution
+     *   flows through the parent invoice's sale_agent).
+     * Qualifying condition: parent invoice's sale_agent = staff
+     * Date field: invoicepaymentrecords.date
+     * Mirrors: modules/goals/models/Goals_model.php, goal_type == 1.
+     */
+    private function calculate_amount_collected($staff_id, $period_start, $period_end)
+    {
+        $p = db_prefix();
+
+        $sql = "SELECT {$p}invoicepaymentrecords.id AS id, {$p}invoicepaymentrecords.amount AS amount
+                FROM {$p}invoicepaymentrecords
+                JOIN {$p}invoices ON {$p}invoices.id = {$p}invoicepaymentrecords.invoiceid
+                WHERE {$p}invoicepaymentrecords.date BETWEEN ? AND ?
+                AND {$p}invoices.sale_agent = ?";
+
+        $rows = $this->CI->db->query($sql, array($period_start, $period_end, $staff_id))->result_array();
+
+        $total = 0.0;
+        $ids = array();
+        foreach ($rows as $row) {
+            $total += (float) $row['amount'];
+            $ids[] = (int) $row['id'];
+        }
+
+        return array(
+            'achieved'     => $total,
+            'record_count' => count($ids),
+            'record_ids'   => $ids,
+            'source_table' => $p . 'invoicepaymentrecords',
+            'unavailable'  => false,
+        );
+    }
+
+    /**
+     * Idempotent daily snapshot. For every Active target whose period
+     * covers $snapshot_date, recalculates each of its metrics' cumulative
+     * achievement from the target's period_start through $snapshot_date
+     * (a running progress-to-date total, matching how a daily activity
+     * ledger is meant to read) and upserts exactly one
+     * tblsales_target_daily_snapshots row per target/metric/day.
+     *
+     * Re-running this for a date whose source data has not changed produces
+     * byte-identical achieved_value/record_count on every call — the unique
+     * key (target_id, metric_id, snapshot_date) plus this upsert logic is
+     * what prevents duplicate rows on re-run.
+     *
+     * Unsupported KPI keys are skipped (not fabricated), per the plan.
+     *
+     * @return int number of snapshot rows written/updated
+     */
+    public function run_daily_snapshot($snapshot_date = null)
+    {
+        $snapshot_date = $snapshot_date ?: date('Y-m-d');
+        $p = db_prefix();
+
+        $this->CI->db->select($p . 'sales_targets.id as target_id, ' . $p . 'sales_targets.staff_id, ' . $p . 'sales_targets.period_start, ' . $p . 'sales_targets.period_end, ' . $p . 'sales_target_metrics.id as metric_id, ' . $p . 'sales_target_metrics.kpi_key');
+        $this->CI->db->from($p . 'sales_targets');
+        $this->CI->db->join($p . 'sales_target_metrics', $p . 'sales_target_metrics.target_id = ' . $p . 'sales_targets.id');
+        $this->CI->db->where($p . 'sales_targets.status', 'Active');
+        $this->CI->db->where($p . 'sales_targets.period_start <=', $snapshot_date);
+        $this->CI->db->where($p . 'sales_targets.period_end >=', $snapshot_date);
+        $rows = $this->CI->db->get()->result_array();
+
+        $written = 0;
+
+        foreach ($rows as $row) {
+            if (!$this->is_supported($row['kpi_key'])) {
+                continue;
+            }
+
+            $result = $this->calculate($row['kpi_key'], $row['staff_id'], $row['period_start'], $snapshot_date);
+
+            $this->CI->db->where('target_id', $row['target_id']);
+            $this->CI->db->where('metric_id', $row['metric_id']);
+            $this->CI->db->where('snapshot_date', $snapshot_date);
+            $existing = $this->CI->db->get($p . 'sales_target_daily_snapshots')->row();
+
+            if ($existing) {
+                $this->CI->db->where('id', $existing->id);
+                $this->CI->db->update($p . 'sales_target_daily_snapshots', array(
+                    'achieved_value' => $result['achieved'],
+                    'record_count'   => $result['record_count'],
+                    'date_updated'   => date('Y-m-d H:i:s'),
+                ));
+            } else {
+                $this->CI->db->insert($p . 'sales_target_daily_snapshots', array(
+                    'target_id'      => $row['target_id'],
+                    'metric_id'      => $row['metric_id'],
+                    'staff_id'       => $row['staff_id'],
+                    'kpi_key'        => $row['kpi_key'],
+                    'snapshot_date'  => $snapshot_date,
+                    'achieved_value' => $result['achieved'],
+                    'record_count'   => $result['record_count'],
+                    'date_created'   => date('Y-m-d H:i:s'),
+                ));
+            }
+
+            $written++;
+        }
+
+        return $written;
+    }
+}

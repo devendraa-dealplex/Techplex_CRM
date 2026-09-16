@@ -1,0 +1,146 @@
+/* Payplex Meetings — admin styles.
+   Scoped under pm- prefixes so nothing here can bleed into core Perfex components. */
+
+.pm-muted { color: #8a919b; font-size: 12px; }
+.pm-empty { color: #8a919b; padding: 18px 0; }
+
+/* ---------- leads Engagement column ---------- */
+.pm-engagement-col { min-width: 170px; }
+.pm-engagement-cell { min-width: 170px; vertical-align: top; }
+.pm-skeleton { color: #b6bcc5; font-size: 11px; }
+
+.pm-chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  border-radius: 20px; padding: 2px 9px;
+  font-size: 11px; font-weight: 600; white-space: nowrap;
+}
+.pm-chip .pm-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; display: inline-block; }
+.pm-chip-up   { background: #e3f2ea; color: #1f7a4d; }
+.pm-chip-due  { background: #fbe6e3; color: #a81f16; }
+.pm-chip-none { background: #eef0f4; color: #78818d; }
+
+.pm-counts { font-size: 11px; color: #8a919b; margin-top: 4px; }
+.pm-actions { margin-top: 6px; }
+.pm-menu { min-width: 210px; }
+.pm-menu .dropdown-header { font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
+
+/* ---------- lead profile tab ---------- */
+.pm-tab-loading { padding: 20px; color: #8a919b; }
+.pm-lead-tab-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+.pm-lead-tab-head h5 { margin: 0; }
+
+.pm-timeline { list-style: none; margin: 0; padding: 0 0 0 18px; border-left: 1px solid #e0e4ea; }
+.pm-timeline-item { position: relative; padding: 0 0 18px 14px; }
+.pm-timeline-dot {
+  position: absolute; left: -23px; top: 5px;
+  width: 9px; height: 9px; border-radius: 50%; border: 2px solid #fff;
+}
+.pm-timeline-body a { font-weight: 600; }
+
+.pm-badge {
+  display: inline-block; border: 1px solid #ccc; border-radius: 3px;
+  padding: 1px 7px; font-size: 11px; margin-left: 6px;
+}
+
+/* ---------- booking drawer ---------- */
+/* Above Bootstrap's modal (1050) and its backdrop: the drawer is opened FROM the lead
+   modal, so at 1055 the modal painted over it. */
+.pm-drawer { position: fixed; inset: 0; z-index: 1080; visibility: hidden; }
+.pm-drawer.pm-open { visibility: visible; }
+.pm-drawer-backdrop {
+  position: absolute; inset: 0; background: rgba(20, 26, 34, .45);
+  opacity: 0; transition: opacity .18s ease;
+}
+.pm-drawer.pm-open .pm-drawer-backdrop { opacity: 1; }
+.pm-drawer-panel {
+  position: absolute; top: 0; right: 0; bottom: 0;
+  width: 560px; max-width: 100%;
+  background: #fff; box-shadow: -8px 0 32px -16px rgba(20, 26, 34, .5);
+  transform: translateX(100%); transition: transform .2s ease;
+  display: flex; flex-direction: column;
+}
+.pm-drawer.pm-open .pm-drawer-panel { transform: translateX(0); }
+.pm-drawer-body { overflow-y: auto; flex: 1; }
+
+.pm-drawer-header {
+  display: flex; justify-content: space-between; align-items: flex-start;
+  padding: 14px 18px; border-bottom: 1px solid #e6e9ee;
+}
+.pm-drawer-header h4 { margin: 0 0 2px; font-size: 17px; }
+
+.pm-prefill {
+  background: #f5f7fa; border-bottom: 1px solid #e6e9ee; padding: 12px 18px;
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px 18px;
+  font-size: 11px; color: #8a919b;
+}
+.pm-prefill b { display: block; color: #22262c; font-size: 13px; }
+
+.pm-grid {
+  padding: 16px 18px;
+  display: grid; grid-template-columns: 1fr 1fr; gap: 4px 16px;
+}
+.pm-span-2 { grid-column: 1 / -1; }
+.pm-inline-check { font-weight: 400; font-size: 12px; margin-top: 6px; display: block; }
+
+.pm-drawer-footer {
+  padding: 12px 18px; border-top: 1px solid #e6e9ee; background: #f5f7fa;
+  display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap;
+}
+
+.pm-participants { border: 1px solid #e0e4ea; border-radius: 3px; padding: 8px; margin-bottom: 8px; }
+.pm-participant {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 5px 0; border-bottom: 1px solid #f0f2f5; font-size: 12px;
+}
+.pm-participant:last-child { border-bottom: 0; }
+.pm-p-name { flex: 1 1 140px; }
+.pm-p-name small { display: block; color: #8a919b; }
+.pm-participant .pm-role { max-width: 110px; }
+.pm-add-external { display: flex; gap: 6px; margin-top: 6px; }
+
+/* ---------- conflicts ---------- */
+.pm-conflicts { margin: 0 18px; }
+.pm-warn, .pm-error {
+  border-radius: 3px; padding: 10px 12px; font-size: 12.5px; margin-top: 14px;
+}
+.pm-warn  { background: #fdf3e0; border: 1px solid #e6c98a; color: #7a5610; }
+.pm-error { background: #fbe6e3; border: 1px solid #e0a49d; color: #8c1f16; }
+.pm-warn ul { margin: 6px 0; padding-left: 18px; }
+.pm-suggest { margin-top: 8px; }
+.pm-override { display: block; margin-top: 8px; font-weight: 600; }
+
+/* ---------- detail page ---------- */
+.pm-dl dt { color: #8a919b; font-weight: 400; font-size: 12px; margin-top: 10px; }
+.pm-dl dd { margin: 2px 0 0; }
+.pm-plain-list { list-style: none; margin: 0; padding: 0; }
+.pm-plain-list li { padding: 6px 0; border-bottom: 1px solid #f0f2f5; font-size: 13px; }
+.pm-plain-list li:last-child { border-bottom: 0; }
+.pm-audit code { font-size: 11px; }
+.pm-confidential {
+  margin-top: 18px; padding: 12px 14px;
+  border: 1px solid #e6c98a; border-left-width: 3px; border-radius: 3px; background: #fdf9f0;
+}
+.pm-confidential h5 { margin-top: 0; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: #7a5610; }
+.pm-code { font-size: 12px; white-space: pre-wrap; word-break: break-all; }
+.pm-table td, .pm-table th { vertical-align: middle; }
+
+/* ---------- mobile: the drawer becomes a bottom sheet ---------- */
+@media (max-width: 767px) {
+  .pm-drawer-panel {
+    top: auto; left: 0; right: 0; bottom: 0;
+    width: 100%; height: 88vh; border-radius: 10px 10px 0 0;
+    transform: translateY(100%);
+  }
+  .pm-drawer.pm-open .pm-drawer-panel { transform: translateY(0); }
+  .pm-grid { grid-template-columns: 1fr; }
+  .pm-engagement-col, .pm-engagement-cell { min-width: 130px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pm-drawer-panel, .pm-drawer-backdrop { transition: none; }
+}
+
+/* Inline slot used on server-side DataTables, where adding a column would break the
+   table's column count. Sits inside the row's last cell instead. */
+.pm-inline-slot { margin-top: 6px; padding-top: 6px; border-top: 1px dashed #e0e4ea; }
+.pm-inline-slot .pm-actions { margin-top: 4px; }

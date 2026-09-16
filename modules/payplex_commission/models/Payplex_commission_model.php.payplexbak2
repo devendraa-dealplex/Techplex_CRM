@@ -1,0 +1,282 @@
+<?php
+defined('BASEPATH') or exit('No direct script access allowed');
+
+require_once __DIR__ . '/../libraries/Payplex_commission_calc.php';
+
+/**
+ * Commission statements: compute -> snapshot -> maker-checker approve -> pay.
+ * Immutability: once a statement is APPROVED/PAID it is never mutated; a
+ * correction creates a NEW statement with supersedes_id pointing at the old one,
+ * and the old one is marked 'superseded'. Changing a rule creates a new
+ * rule_version and never rewrites approved statements.
+ */
+class Payplex_commission_model extends App_Model
+{
+    private $tRules;
+    private $tStmt;
+    private $tItems;
+    private $tDisp;
+
+    public function __construct()
+    {
+        parent::__construct();
+        $this->tRules = db_prefix() . 'payplex_commission_rule_versions';
+        $this->tStmt  = db_prefix() . 'payplex_commission_statements';
+        $this->tItems = db_prefix() . 'payplex_commission_items';
+        $this->tDisp  = db_prefix() . 'payplex_commission_disputes';
+    }
+
+    public function activeRule($scope = 'global', $scopeRef = null)
+    {
+        $this->db->where('active', 1)->where('scope', $scope);
+        if ($scopeRef !== null) {
+            $this->db->where('scope_ref', $scopeRef);
+        }
+        $row = $this->db->order_by('id', 'DESC')->limit(1)->get($this->tRules)->row();
+        if (!$row) {
+            $row = $this->db->where('active', 1)->where('scope', 'global')
+                ->order_by('id', 'DESC')->limit(1)->get($this->tRules)->row();
+        }
+        return $row;
+    }
+
+    /**
+     * Compute a DRAFT statement for a staff member + period from source rows.
+     * $sources: array of ['type','id','base','achieved_pct'].
+     * Does NOT touch any already-approved statement.
+     */
+    public function computeDraft($staffId, $period, array $sources, $currency = 'INR')
+    {
+        $rule = $this->activeRule('staff', (string) $staffId) ?: $this->activeRule('global');
+        $ruleDef = $rule ? json_decode($rule->rule_json, true) : ['type' => 'percentage', 'rate' => 5];
+
+        $gross = 0.0;
+        $items = [];
+        // Sales Targets integration point: resolve this staff member's
+        // achievement % once for the whole statement via a read-only bridge
+        // to the Sales Targets module (0.0 when that module is absent or
+        // inactive or has no active target for the period). A source may
+        // still override with an explicit positive achieved_pct.
+        $targetPct = $this->salesTargetAchievementPct((int) $staffId, $period);
+        foreach ($sources as $s) {
+            $provided    = isset($s['achieved_pct']) ? (float) $s['achieved_pct'] : 0.0;
+            $achievedPct = $provided > 0 ? $provided : $targetPct;
+            $res = Payplex_commission_calc::compute($s['base'] ?? 0, $ruleDef, $achievedPct);
+            $gross += $res['amount'];
+            $items[] = [
+                'source_type'       => $s['type'] ?? 'invoice',
+                'source_id'         => $s['id'] ?? null,
+                'base_amount'       => round((float) ($s['base'] ?? 0), 2),
+                'commission_amount' => $res['amount'],
+                'breakdown'         => implode('; ', $res['breakdown']),
+            ];
+        }
+        $gross = round($gross, 2);
+
+        $computed = ['rule' => $ruleDef, 'items' => $items, 'gross' => $gross, 'target_achievement_pct' => $targetPct];
+        $this->db->insert($this->tStmt, [
+            'staff_id'        => (int) $staffId,
+            'period'          => $period,
+            'rule_version_id' => $rule ? $rule->id : null,
+            'gross_amount'    => $gross,
+            'net_amount'      => $gross,
+            'currency'        => $currency,
+            'computed_json'   => json_encode($computed),
+            'status'          => 'pending_approval',
+            'created_by'      => function_exists('get_staff_user_id') ? get_staff_user_id() : null,
+            'created_at'      => date('Y-m-d H:i:s'),
+        ]);
+        $statementId = $this->db->insert_id();
+        foreach ($items as $it) {
+            $it['statement_id'] = $statementId;
+            $it['created_at'] = date('Y-m-d H:i:s');
+            $this->db->insert($this->tItems, $it);
+        }
+        return $statementId;
+    }
+
+    /**
+     * Read-only bridge to the separately-owned Sales Targets module. Returns
+     * the staff member converted-leads achievement % for the commission
+     * period, used to drive the accelerator in Payplex_commission_calc.
+     * Returns 0.0 on ANY of: module not deployed, no active target
+     * overlapping the period, target value <= 0, or any lookup error. A
+     * missing or broken Sales Targets module must never break commission
+     * computation.
+     *
+     * @param  int    $staffId
+     * @param  string $period   commission period, Y-m
+     * @return float
+     */
+    private function salesTargetAchievementPct($staffId, $period)
+    {
+        try {
+            $staffId = (int) $staffId;
+            if ($staffId <= 0) {
+                return 0.0;
+            }
+
+            // The module must be physically present; loading a missing model
+            // would raise a fatal that try/catch cannot trap.
+            $modelFile = FCPATH . 'modules/sales_targets/models/Sales_targets_model.php';
+            if (!is_file($modelFile)) {
+                return 0.0;
+            }
+
+            $range  = $this->periodToDateRange($period);
+            $pStart = $range[0];
+            $pEnd   = $range[1];
+
+            $ci = &get_instance();
+            $ci->load->model('sales_targets/sales_targets_model');
+            if (!isset($ci->sales_targets_model)) {
+                return 0.0;
+            }
+
+            // get_all() returns the staff member non-cancelled targets, each
+            // already carrying target_value plus a live 'achieved' figure.
+            $targets = $ci->sales_targets_model->get_all($staffId);
+            if (empty($targets)) {
+                return 0.0;
+            }
+
+            // Pick the target whose [period_start, period_end] overlaps the
+            // commission period; prefer the latest-starting one on ties.
+            $best = null;
+            foreach ($targets as $t) {
+                $status = isset($t['status']) ? $t['status'] : 'Active';
+                if ($status === 'Cancelled') {
+                    continue;
+                }
+                $ts = isset($t['period_start']) ? $t['period_start'] : null;
+                $te = isset($t['period_end']) ? $t['period_end'] : null;
+                if (!$ts || !$te) {
+                    continue;
+                }
+                // DATE strings (Y-m-d) compare correctly as text.
+                if ($te >= $pStart && $ts <= $pEnd) {
+                    if ($best === null || $ts > $best['period_start']) {
+                        $best = $t;
+                    }
+                }
+            }
+            if ($best === null) {
+                return 0.0;
+            }
+
+            $target = (float) $best['target_value'];
+            if ($target <= 0) {
+                return 0.0;
+            }
+
+            return round((float) $best['achieved'] / $target * 100.0, 2);
+        } catch (Throwable $e) {
+            return 0.0;
+        }
+    }
+
+    /**
+     * Map a commission period string to a [start, end] date range (Y-m-d).
+     * Supports Y-m (calendar month); anything else falls back to the current
+     * calendar month so a malformed period can never fatal.
+     *
+     * @param  string $period
+     * @return array  [startDate, endDate]
+     */
+    private function periodToDateRange($period)
+    {
+        if (is_string($period) && preg_match('/^[0-9]{4}-(0[1-9]|1[0-2])$/', $period)) {
+            $start = $period . '-01';
+            return [$start, date('Y-m-t', strtotime($start))];
+        }
+
+        return [date('Y-m-01'), date('Y-m-t')];
+    }
+
+    public function get($id)
+    {
+        return $this->db->where('id', (int) $id)->get($this->tStmt)->row();
+    }
+
+    public function all($status = null, $staffId = null, $limit = 200)
+    {
+        if ($status) { $this->db->where('status', $status); }
+        if ($staffId) { $this->db->where('staff_id', (int) $staffId); }
+        return $this->db->order_by('created_at', 'DESC')->limit($limit)->get($this->tStmt)->result();
+    }
+
+    public function itemsFor($statementId)
+    {
+        return $this->db->where('statement_id', (int) $statementId)->get($this->tItems)->result();
+    }
+
+    /**
+     * Maker-checker approval. Freezes the row with a snapshot hash. Immutable after.
+     * @return true|string reason
+     */
+    public function approve($id, $approver)
+    {
+        $s = $this->get($id);
+        if (!$s) { return 'not_found'; }
+        if ($s->status !== 'pending_approval') { return 'not_pending'; }
+        if ((int) $s->created_by === (int) $approver) { return 'maker_is_checker'; }
+
+        $hashBasis = $s->staff_id . '|' . $s->period . '|' . $s->net_amount . '|' . $s->computed_json;
+        $hash = hash('sha256', $hashBasis);
+        $this->db->where('id', $id)->where('status', 'pending_approval')->update($this->tStmt, [
+            'status'        => 'approved',
+            'approved_by'   => (int) $approver,
+            'approved_at'   => date('Y-m-d H:i:s'),
+            'snapshot_hash' => $hash,
+            'updated_at'    => date('Y-m-d H:i:s'),
+        ]);
+        return $this->db->affected_rows() ? true : 'race_lost';
+    }
+
+    /** Mark an approved statement paid (finance). */
+    public function markPaid($id, $payer)
+    {
+        $s = $this->get($id);
+        if (!$s || $s->status !== 'approved') { return 'not_approved'; }
+        $this->db->where('id', $id)->where('status', 'approved')->update($this->tStmt, [
+            'status' => 'paid', 'paid_at' => date('Y-m-d H:i:s'), 'updated_at' => date('Y-m-d H:i:s'),
+        ]);
+        return $this->db->affected_rows() ? true : 'race_lost';
+    }
+
+    /**
+     * Correction: never edits an approved statement. Creates a superseding draft.
+     */
+    public function supersede($oldId, array $sources)
+    {
+        $old = $this->get($oldId);
+        if (!$old) { return 'not_found'; }
+        $newId = $this->computeDraft($old->staff_id, $old->period, $sources, $old->currency);
+        $this->db->where('id', $newId)->update($this->tStmt, ['supersedes_id' => (int) $oldId]);
+        $this->db->where('id', $oldId)->update($this->tStmt, ['status' => 'superseded', 'updated_at' => date('Y-m-d H:i:s')]);
+        return $newId;
+    }
+
+    /** Verify an approved statement has not been tampered with. */
+    public function verifyIntegrity($id)
+    {
+        $s = $this->get($id);
+        if (!$s || !$s->snapshot_hash) { return null; }
+        $hashBasis = $s->staff_id . '|' . $s->period . '|' . $s->net_amount . '|' . $s->computed_json;
+        return hash_equals($s->snapshot_hash, hash('sha256', $hashBasis));
+    }
+
+    /* disputes */
+    public function raiseDispute($statementId, $reason)
+    {
+        $this->db->insert($this->tDisp, [
+            'statement_id' => (int) $statementId,
+            'raised_by'    => function_exists('get_staff_user_id') ? get_staff_user_id() : null,
+            'reason'       => $reason,
+            'status'       => 'open',
+            'created_at'   => date('Y-m-d H:i:s'),
+        ]);
+        $this->db->where('id', $statementId)->update($this->tStmt, ['status' => 'disputed']);
+        return $this->db->insert_id();
+    }
+}
