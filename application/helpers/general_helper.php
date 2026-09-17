@@ -280,29 +280,29 @@ function maybe_redirect_to_previous_url()
  *
  * @return bool
  */
-function do_recaptcha_validation($str = '')
-{
-    $CI = &get_instance();
-    $CI->load->library('form_validation');
-    $google_url = 'https://www.google.com/recaptcha/api/siteverify';
-    $secret     = get_option('recaptcha_secret_key');
-    $ip         = $CI->input->ip_address();
-    $url        = $google_url . '?secret=' . $secret . '&response=' . $str . '&remoteip=' . $ip;
-    $curl       = curl_init();
-    curl_setopt($curl, CURLOPT_URL, $url);
-    curl_setopt($curl, CURLOPT_RETURNTRANSFER, 1);
-    curl_setopt($curl, CURLOPT_TIMEOUT, 10);
-    $res = curl_exec($curl);
-    curl_close($curl);
-    $res = json_decode($res, true);
-    // reCaptcha success check
-    if ($res['success']) {
-        return true;
-    }
-    $CI->form_validation->set_message('recaptcha', _l('recaptcha_error'));
+// function do_recaptcha_validation($str = '')
+// {
+//     $CI = &get_instance();
+//     $CI->load->library('form_validation');
+//     $google_url = 'https://www.google.com/recaptcha/api/siteverify';
+//     $secret     = get_option('recaptcha_secret_key');
+//     $ip         = $CI->input->ip_address();
+//     $url        = $google_url . '?secret=' . $secret . '&response=' . $str . '&remoteip=' . $ip;
+//     $curl       = curl_init();
+//     curl_setopt($curl, CURLOPT_URL, $url);
+//     curl_setopt($curl, CURLOPT_RETURNTRANSFER, 1);
+//     curl_setopt($curl, CURLOPT_TIMEOUT, 10);
+//     $res = curl_exec($curl);
+//     curl_close($curl);
+//     $res = json_decode($res, true);
+//     // reCaptcha success check
+//     if ($res['success']) {
+//         return true;
+//     }
+//     $CI->form_validation->set_message('recaptcha', _l('recaptcha_error'));
 
-    return false;
-}
+//     return false;
+// }
 /**
  * Get current date format from options
  *

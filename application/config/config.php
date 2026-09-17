@@ -49,7 +49,7 @@ function db_prefix()
 |
 */
 
-$config['base_url'] = 'https://staging.support.techplex.in/';
+$config['base_url'] = 'http://localhost/Techplex/';
 
 /*
 |--------------------------------------------------------------------------

@@ -1,12 +1,5 @@
 AddDefaultCharset utf-8
 
-# Force HTTPS redirection
-<IfModule mod_rewrite.c>
-    RewriteEngine on
-    RewriteCond %{HTTPS} off
-    RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
-</IfModule>
-
 <IfModule mod_rewrite.c>
 RewriteEngine on
 RewriteCond $1 !^(index\.php|resources|robots\.txt)

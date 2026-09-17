@@ -49,9 +49,9 @@
         }
     }
     </style>
-    <?php if (show_recaptcha()) { ?>
+    <!-- <?php if (show_recaptcha()) { ?>
     <script src='https://www.google.com/recaptcha/api.js'></script>
-    <?php } ?>
+    <?php } ?> -->
     <?php if (file_exists(FCPATH . 'assets/css/custom.css')) { ?>
     <link href="<?php echo base_url('assets/css/custom.css'); ?>" rel="stylesheet" id="custom-css">
     <?php } ?>

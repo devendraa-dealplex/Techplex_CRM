@@ -49,11 +49,11 @@
                 <input type="password" id="password" name="password" class="form-control">
             </div>
 
-            <?php if (show_recaptcha()) { ?>
+            <!-- <?php if (show_recaptcha()) { ?>
             <div class="g-recaptcha tw-mb-4"
                 data-sitekey="<?= get_option('recaptcha_site_key'); ?>">
             </div>
-            <?php } ?>
+            <?php } ?> -->
 
             <div class="form-group">
                 <div class="checkbox checkbox-inline">

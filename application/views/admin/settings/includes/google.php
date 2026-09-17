@@ -2,6 +2,10 @@
 <?php echo render_input('settings[google_api_key]','settings_google_api',get_option('google_api_key')); ?>
 <?php echo render_input('settings[google_client_id]','google_api_client_id',get_option('google_client_id')); ?>
 <hr />
+
+
+
+
 <h4><?php echo _l('re_captcha'); ?></h4>
 <?php echo render_input('settings[recaptcha_site_key]','recaptcha_site_key',get_option('recaptcha_site_key')); ?>
 <?php echo render_input('settings[recaptcha_secret_key]','recaptcha_secret_key',get_option('recaptcha_secret_key')); ?>

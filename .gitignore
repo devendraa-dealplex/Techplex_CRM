@@ -1,0 +1,44 @@
+# Node and frontend tooling
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+mix-manifest.json
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+
+# PHP and application runtime files
+/application/cache/*
+!/application/cache/index.html
+/application/logs/*
+!/application/logs/index.html
+/temp/*
+!/temp/index.html
+/error_log
+
+# User-uploaded and generated local files
+/uploads/*
+!/uploads/index.html
+/media/*
+!/media/index.html
+
+# IDE and operating-system files
+.vscode/
+.idea/
+*.code-workspace
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Local XAMPP/server files
+xampp/
+
+# Backups and temporary files
+*.bak
+*.tmp
+*.swp
+*.swo
