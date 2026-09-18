@@ -30,6 +30,11 @@
                   <button class="btn btn-xs btn-default" type="submit">Reject</button>
                 <?php echo form_close(); ?>
               <?php endif; ?>
+              <?php if ($can_create && $c->status !== 'running'): ?>
+                <?php echo form_open(admin_url('payplex_aicalling/campaigns/delete/'.$c->id), ['style'=>'display:inline']); ?>
+                  <button class="btn btn-xs btn-danger" type="submit" onclick="return confirm('Delete this campaign? This cannot be undone.');">Delete</button>
+                <?php echo form_close(); ?>
+              <?php endif; ?>
             </td>
           </tr>
         <?php endforeach; endif; ?>
