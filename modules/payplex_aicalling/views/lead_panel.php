@@ -7,11 +7,31 @@
  */
 $leadId   = isset($lead) ? $lead->id : (int) ($this->input->get('id') ?? 0);
 $canCall  = is_admin() || staff_can('create', 'payplex_aicalling');
+$canConsentView   = is_admin() || staff_can('consent_view', 'payplex_aicalling');
+$canConsentManage = is_admin() || staff_can('consent_manage', 'payplex_aicalling');
+$consent = null;
+if ($canConsentView && $leadId) {
+    $this->load->model('payplex_aicalling/payplex_consent_model');
+    $consent = $this->payplex_consent_model->current('lead', $leadId, 'call');
+}
 ?>
 <div class="pp-lead-panel" data-lead="<?php echo (int) $leadId; ?>">
   <?php if (!$canCall): ?>
     <p class="text-muted">You do not have permission to place AI calls.</p>
   <?php else: ?>
+  <?php if ($canConsentView): ?>
+    <div class="pp-consent-quick" data-type="lead" data-id="<?php echo (int) $leadId; ?>" data-channel="call"
+         data-state="<?php echo html_escape($consent->state ?? 'missing'); ?>"
+         data-dnd="<?php echo (int) ($consent->dnd ?? 0); ?>" style="margin-bottom:10px;">
+      Consent: <span class="pp-badge pp-<?php echo ($consent && $consent->state === 'granted') ? 'completed' : 'failed'; ?>"><?php echo html_escape($consent ? $consent->state : 'not set'); ?></span>
+      &nbsp;DND: <?php echo ($consent && (int) $consent->dnd === 1) ? '<span class="pp-badge pp-failed">on</span>' : 'off'; ?>
+      <?php if ($canConsentManage): ?>
+        <button class="btn btn-xs btn-success pp-consent-grant">Grant</button>
+        <button class="btn btn-xs btn-default pp-consent-withdraw">Withdraw</button>
+        <button class="btn btn-xs btn-danger pp-consent-dnd">Toggle DND</button>
+      <?php endif; ?>
+    </div>
+  <?php endif; ?>
   <div class="pp-actionbar">
     <button class="btn btn-success btn-sm pp-call-now"><i class="fa fa-phone"></i> Call Now</button>
     <button class="btn btn-default btn-sm pp-call-schedule"><i class="fa fa-clock-o"></i> Schedule Call</button>
@@ -54,5 +74,6 @@ $canCall  = is_admin() || staff_can('create', 'payplex_aicalling');
 <script>
   window.PP_START_URL = "<?php echo admin_url('payplex_aicalling/aicalling/start_call'); ?>";
   window.PP_LEAD_HISTORY_URL = "<?php echo admin_url('payplex_aicalling/aicalling/history'); ?>";
+  window.PP_CONSENT_SET = "<?php echo admin_url('payplex_aicalling/consent/set'); ?>";
   window.PP_CSRF = {name:"<?php echo $this->security->get_csrf_token_name(); ?>", hash:"<?php echo $this->security->get_csrf_hash(); ?>"};
 </script>

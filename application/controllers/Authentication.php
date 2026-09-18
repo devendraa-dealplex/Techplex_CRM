@@ -30,7 +30,6 @@ class Authentication extends ClientsController
         $this->form_validation->set_rules('password', _l('clients_login_password'), 'required');
         $this->form_validation->set_rules('email', _l('clients_login_email'), 'trim|required|valid_email');
 
-        // Client login reCAPTCHA is disabled for local development.
         // if (show_recaptcha_in_customers_area()) {
         //     $this->form_validation->set_rules('g-recaptcha-response', 'Captcha', 'callback_recaptcha');
         // }
@@ -133,7 +132,6 @@ class Authentication extends ClientsController
         $this->form_validation->set_rules('password', _l('clients_register_password'), 'required');
         $this->form_validation->set_rules('passwordr', _l('clients_register_password_repeat'), 'required|matches[password]');
 
-        // Client registration reCAPTCHA is disabled for local development.
         // if (show_recaptcha_in_customers_area()) {
         //     $this->form_validation->set_rules('g-recaptcha-response', 'Captcha', 'callback_recaptcha');
         // }
@@ -358,10 +356,10 @@ class Authentication extends ClientsController
         return true;
     }
 
-    public function recaptcha($str = '')
-    {
-        return do_recaptcha_validation($str);
-    }
+    // public function recaptcha($str = '')
+    // {
+    //     return do_recaptcha_validation($str);
+    // }
 
     public function change_language($lang = '')
     {

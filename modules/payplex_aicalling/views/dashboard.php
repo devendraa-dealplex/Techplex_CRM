@@ -16,6 +16,10 @@
               </div>
             </div>
 
+            <?php foreach ($budget_warnings as $w): ?>
+              <div class="alert alert-warning" style="font-size:13px"><i class="fa fa-exclamation-triangle"></i> <?php echo html_escape($w); ?></div>
+            <?php endforeach; ?>
+
             <div class="row pp-kpis">
               <div class="col-md-3 col-sm-6">
                 <div class="pp-kpi"><div class="pp-kpi-l">Sonivo status</div>
@@ -64,6 +68,7 @@
                     <td><?php echo $c->duration_sec ? gmdate('i:s', $c->duration_sec) : '—'; ?></td>
                     <td><?php echo $c->cost !== null ? app_format_money($c->cost, $c->currency) : '—'; ?></td>
                     <td>
+                      <a class="btn btn-xs btn-default" href="<?php echo admin_url('payplex_aicalling/aicalling/call_detail/'.$c->id); ?>">Details</a>
                       <?php if ($c->recording_available && (is_admin() || staff_can('recording_access','payplex_aicalling'))): ?>
                         <a class="btn btn-xs btn-default" href="<?php echo admin_url('payplex_aicalling/aicalling/recording/'.$c->id); ?>">▶</a>
                       <?php endif; ?>

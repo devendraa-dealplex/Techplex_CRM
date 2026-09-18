@@ -11,20 +11,32 @@
       <?php endif; ?>
     </div>
 
-    <h5 class="pp-sub">Outbound queue (pending / failed)</h5>
+    <h5 class="pp-sub">Outbound queue (pending / failed / abandoned)</h5>
+    <p class="text-muted" style="font-size:12px">
+      <b>Abandoned</b> means the retry policy will not try this again on its own — a 4xx rejection,
+      or the attempt ceiling was reached. It stays here until a human requeues or the underlying
+      cause is otherwise resolved.
+    </p>
     <div class="table-responsive">
       <table class="table pp-table">
-        <thead><tr><th>Endpoint</th><th>Status</th><th>Attempts</th><th>Last error</th><th>Next retry</th><th>Created</th></tr></thead>
+        <thead><tr><th>Endpoint</th><th>Status</th><th>Attempts</th><th>Last error</th><th>Next retry</th><th>Created</th><th></th></tr></thead>
         <tbody>
-        <?php if (empty($outbox)): ?><tr><td colspan="6" class="pp-empty">Nothing queued — all synced.</td></tr>
+        <?php if (empty($outbox)): ?><tr><td colspan="7" class="pp-empty">Nothing queued — all synced.</td></tr>
         <?php else: foreach ($outbox as $o): ?>
           <tr>
             <td class="mini"><?php echo html_escape($o->method.' '.$o->endpoint); ?></td>
-            <td><span class="pp-badge pp-<?php echo $o->status==='failed'?'failed':'scheduled'; ?>"><?php echo html_escape($o->status); ?></span></td>
+            <td><span class="pp-badge pp-<?php echo $o->status==='abandoned'?'failed':($o->status==='failed'?'failed':'scheduled'); ?>"><?php echo html_escape($o->status); ?></span></td>
             <td><?php echo (int)$o->attempts; ?></td>
             <td class="mini"><?php echo html_escape($o->last_error ?: '—'); ?></td>
             <td class="mini"><?php echo $o->next_retry_at ? _dt($o->next_retry_at) : '—'; ?></td>
             <td class="mini"><?php echo _dt($o->created_at); ?></td>
+            <td>
+              <?php if ($o->status === 'abandoned' && (is_admin() || staff_can('reconcile_run','payplex_aicalling'))): ?>
+                <?php echo form_open(admin_url('payplex_aicalling/reconciliation/retry_outbox_item/'.$o->id), ['style'=>'display:inline']); ?>
+                  <button class="btn btn-xs btn-default" type="submit">Retry anyway</button>
+                <?php echo form_close(); ?>
+              <?php endif; ?>
+            </td>
           </tr>
         <?php endforeach; endif; ?>
         </tbody>

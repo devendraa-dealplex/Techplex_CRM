@@ -126,19 +126,20 @@
       });
   }
 
+  // .closest('[data-type]') matches both a Consent-table <tr> and the lead panel's quick-toggle div.
   $(document).on('click', '.pp-consent-grant', function () {
-    var row = $(this).closest('tr');
+    var row = $(this).closest('[data-type]');
     // preserve the DND flag: granting consent is not a reason to clear it
     consentWrite(row, 'granted', parseInt(row.data('dnd'), 10) === 1, $(this));
   });
 
   $(document).on('click', '.pp-consent-withdraw', function () {
-    var row = $(this).closest('tr');
+    var row = $(this).closest('[data-type]');
     consentWrite(row, 'withdrawn', parseInt(row.data('dnd'), 10) === 1, $(this));
   });
 
   $(document).on('click', '.pp-consent-dnd', function () {
-    var row = $(this).closest('tr');
+    var row = $(this).closest('[data-type]');
     var on  = parseInt(row.data('dnd'), 10) === 1;
     // preserve the consent state: toggling DND is not a consent decision
     consentWrite(row, String(row.data('state') || 'granted'), !on, $(this));
