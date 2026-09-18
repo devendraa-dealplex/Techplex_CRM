@@ -19,12 +19,15 @@
 
       <div class="panel_s" style="background:#f4f8fb"><div class="panel-body">
         <strong>Test: simulate a call (sandbox)</strong>
-        <?php echo form_open(admin_url('payplex_ai_agents/calling/test'), array('class' => 'form-inline', 'style' => 'margin-top:6px')); ?>
-          <div class="form-group"><input class="form-control input-sm" name="agent_id" placeholder="Agent id" style="width:90px"></div>
-          <div class="form-group"><input class="form-control input-sm" name="c_name" placeholder="Lead name" value="Test Lead" style="width:140px"></div>
-          <div class="form-group"><input class="form-control input-sm" name="c_phone" placeholder="Phone" value="+910000012345" style="width:150px"></div>
+        <?php echo form_open(admin_url('payplex_ai_agents/calling/test'), array('class' => 'form-inline', 'style' => 'margin-top:6px', 'id' => 'call-sim-form')); ?>
+          <div class="form-group"><input class="form-control input-sm" name="agent_id" id="call-sim-agent-id" placeholder="Agent id" style="width:90px"></div>
+          <div class="form-group"><input class="form-control input-sm" name="c_name" id="call-sim-lead-name" placeholder="Lead name" value="Test Lead" style="width:140px"></div>
+          <div class="form-group">
+            <input class="form-control input-sm" name="c_phone" id="call-sim-phone" placeholder="Phone" value="+910000000000" style="width:150px">
+          </div>
           <div class="form-group"><input class="form-control input-sm" name="c_script" placeholder="Script" style="width:220px"></div>
           <button class="btn btn-info btn-sm" type="submit">Simulate</button>
+          <div id="call-sim-phone-error" class="text-danger" style="display:none;width:100%;font-size:12px;margin-top:4px">Enter a valid 10-digit Indian mobile number (starting 6-9), e.g. +910000000000.</div>
         <?php echo form_close(); ?>
       </div></div>
 
@@ -62,5 +65,48 @@
   </div>
 </div>
 <?php init_tail(); ?>
+<script>
+$(function(){
+  // Same rule enforced server-side in Calling::isValidPhone() - Indian mobiles only.
+  var IN_RE = /^(?:\+91|91|0)?[6-9]\d{9}$/;
+  var SAMPLE_PHONE = '+910000000000'; // the form's own default value - let through as-is
+
+  function isValidPhone(raw) {
+    var normalized = String(raw || '').replace(/[\s\-.()]/g, '');
+    if (!normalized) { return false; }
+    if (normalized === SAMPLE_PHONE) { return true; }
+    return IN_RE.test(normalized);
+  }
+
+  $('#call-sim-form').on('submit', function(e){
+    var agentIdRaw = $('#call-sim-agent-id').val().trim();
+    var leadName    = $('#call-sim-lead-name').val().trim();
+    var val         = $('#call-sim-phone').val().trim();
+
+    if (agentIdRaw === '' || leadName === '' || val === '') {
+      e.preventDefault();
+      alert('Please fill out all required fields (Agent ID, Lead, and Phone Number) before simulating a call.');
+      return false;
+    }
+    if (!/^\d+$/.test(agentIdRaw) || Number(agentIdRaw) <= 0) {
+      e.preventDefault();
+      alert('Please enter a valid Agent ID.');
+      return false;
+    }
+    if (!isValidPhone(val)) {
+      e.preventDefault();
+      $('#call-sim-phone-error').show();
+      $('#call-sim-phone').addClass('has-error');
+      alert_float('warning', 'Enter a valid 10-digit Indian mobile number (starting 6-9), e.g. +910000000000.');
+      return false;
+    }
+    $('#call-sim-phone-error').hide();
+  });
+
+  $('#call-sim-phone').on('input', function(){
+    $('#call-sim-phone-error').hide();
+  });
+});
+</script>
 </body>
 </html>
