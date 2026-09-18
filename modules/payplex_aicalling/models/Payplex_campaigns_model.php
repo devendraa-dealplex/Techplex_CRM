@@ -90,6 +90,23 @@ class Payplex_campaigns_model extends App_Model
         return $this->update($id, ['status' => 'rejected', 'reject_reason' => $reason]);
     }
 
+    /** Case-insensitive name match among non-rejected campaigns — a rejected name is free to reuse. */
+    public function findDuplicateByName($name, $excludeId = null)
+    {
+        $name = trim((string) $name);
+        if ($name === '') {
+            return null;
+        }
+        // where()'s escape=false skips escaping the VALUE too, not just the key, so the
+        // value is quoted explicitly here and folded into the condition string itself.
+        $this->db->where('LOWER(name) = ' . $this->db->escape(strtolower($name)), null, false)
+            ->where('status !=', 'rejected');
+        if ($excludeId) {
+            $this->db->where('id !=', (int) $excludeId);
+        }
+        return $this->db->get($this->table)->row();
+    }
+
     public function delete($id)
     {
         $this->db->where('id', (int) $id)->delete($this->table);
