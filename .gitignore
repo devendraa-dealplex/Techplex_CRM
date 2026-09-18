@@ -45,3 +45,7 @@ xampp/
 
 # Local bug tracking file
 bugs.csv
+README.txt
+
+# Local deployment overlay - not for the repo
+/deployment/
