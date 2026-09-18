@@ -68,22 +68,30 @@ class Payplex_ai_agents_model extends App_Model
         return $this->get(null, false);
     }
 
-    /** Whether a non-template agent with this name already exists (case-insensitive). */
-    public function nameExists($name)
-    {
-        $name = trim((string) $name);
-        if ($name === '') {
-            return false;
-        }
-        return (bool) $this->db->where('LOWER(name) =', strtolower($name))
-            ->where('is_template', 0)
-            ->get($this->table())
-            ->num_rows();
-    }
-
     public function templates()
     {
         return $this->get(null, true);
+    }
+
+    /** Case-insensitive name uniqueness check, excluding one id (for edits). */
+    public function agentNameTaken($name, $excludeId = 0)
+    {
+        $this->db->where('LOWER(name)', strtolower(trim((string) $name)));
+        if ((int) $excludeId > 0) {
+            $this->db->where('id !=', (int) $excludeId);
+        }
+        return $this->db->count_all_results($this->table()) > 0;
+    }
+
+    /** Does this id correspond to an active staff member? Used to validate owner/reviewer/approver ids. */
+    public function staffExists($staffId)
+    {
+        $staffId = (int) $staffId;
+        if ($staffId <= 0) {
+            return true; // blank/0 is "not set", not invalid
+        }
+        $this->db->where('staffid', $staffId);
+        return $this->db->count_all_results(db_prefix() . 'staff') > 0;
     }
 
     private function decode($row)
@@ -147,6 +155,28 @@ class Payplex_ai_agents_model extends App_Model
         $data['lastupdated'] = date('Y-m-d H:i:s');
         $this->db->where('id', $id)->update($this->table(), $data);
         $this->audit($id, 'config_change', 'Agent configuration updated', array('fields' => array_keys($data)), $actorId);
+        return true;
+    }
+
+    /**
+     * Permanently delete an agent and the data that is only meaningful attached
+     * to it (version snapshots, run history). Governance/compliance records that
+     * exist independently of the agent still existing - the audit trail,
+     * escalations, decision packets, council reviews, comms, calls, pipeline
+     * events - are deliberately left in place, same as archiving elsewhere in
+     * this module never erases history. The deletion itself is still audited.
+     */
+    public function deleteAgent($id, $actorId = 0)
+    {
+        $id = (int) $id;
+        $agent = $this->get($id);
+        if (!$agent) {
+            return false;
+        }
+        $this->db->where('id', $id)->delete($this->table());
+        $this->db->where('agent_id', $id)->delete(db_prefix() . 'payplex_ai_agent_versions');
+        $this->db->where('agent_id', $id)->delete(db_prefix() . 'payplex_ai_agent_runs');
+        $this->audit($id, 'lifecycle', 'Agent #' . $id . ' deleted: ' . $agent->name, array('name' => $agent->name), $actorId);
         return true;
     }
 
@@ -394,6 +424,7 @@ class Payplex_ai_agents_model extends App_Model
             'actor_id'     => (int) $actorId,
             'created_by'   => (int) $agent->created_by,
             'submitted_by' => (int) $agent->submitted_by,
+            'approver_id'  => (int) $agent->approver_id,
         );
         $res = Payplex_agent_lifecycle::apply($action, $agent->status, $ctx);
         if (empty($res['ok'])) {
@@ -504,6 +535,7 @@ class Payplex_ai_agents_model extends App_Model
             return array('ok' => false, 'error' => 'not_runnable');
         }
 
+        $usage = $this->agentMonthUsage((int) $id);
         $ctx = array(
             'global_kill' => (int) $this->getSetting('global_kill_switch', 0) === 1,
             'agent_kill'  => (int) $agent->agent_kill === 1,
@@ -511,6 +543,10 @@ class Payplex_ai_agents_model extends App_Model
                 'token_limit' => (int) $agent->token_limit,
                 'daily_limit' => (int) $agent->daily_execution_limit,
                 'daily_runs'  => (int) $this->countRunsToday((int) $id),
+                // Month-to-date spend vs. this agent's configured monthly budget -
+                // a budget of $0 correctly blocks further spend (see checkBudget()).
+                'spent'       => (float) $usage->cost,
+                'budget'      => (float) $agent->monthly_budget,
             ),
         );
 
@@ -781,6 +817,18 @@ class Payplex_ai_agents_model extends App_Model
     {
         $this->db->where('id', (int) $id)->update($this->kbTable(), array('indexing_status' => 'indexed', 'lastupdated' => date('Y-m-d H:i:s')));
         $this->audit(null, 'config_change', 'KB entry #' . $id . ' re-indexed', array('kb_id' => (int) $id), $actorId);
+        return true;
+    }
+
+    public function kbDelete($id, $actorId = 0)
+    {
+        $row = $this->kbGet((int) $id);
+        if (!$row) {
+            return false;
+        }
+        $this->db->where('id', (int) $id)->delete($this->kbTable());
+        $this->db->where('kb_id', (int) $id)->delete(db_prefix() . 'payplex_ai_agent_kb_versions');
+        $this->audit(null, 'config_change', 'KB entry #' . $id . ' deleted: ' . $row->title, array('kb_id' => (int) $id), $actorId);
         return true;
     }
 
