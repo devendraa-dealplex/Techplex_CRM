@@ -86,10 +86,10 @@ if (defined('APP_DB_ENCRYPT')) {
 
 $db['default'] = array_merge([
     'dsn'          => '', // Not Supported
-    'hostname'     => 'localhost',
-    'username'      => 'root',
-    'password'      => '',
-    'database'      => 'support_dealplex',
+    'hostname'     => APP_DB_HOSTNAME,
+    'username'     => APP_DB_USERNAME,
+    'password'     => APP_DB_PASSWORD,
+    'database'     => APP_DB_NAME,
     'dbdriver'     => defined('APP_DB_DRIVER') ? APP_DB_DRIVER : 'mysqli',
     'dbprefix'     => db_prefix(),
     'pconnect'     => false,
