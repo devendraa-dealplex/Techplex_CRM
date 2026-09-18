@@ -9,6 +9,9 @@ defined('BASEPATH') or exit('No direct script access allowed');
  */
 class Knowledge extends AdminController
 {
+    /** Max characters accepted for a test question in "Ask" - keeps the UI/API bounded. */
+    const ASK_QUERY_MAX_LENGTH = 500;
+
     public function __construct()
     {
         parent::__construct();
@@ -100,8 +103,22 @@ class Knowledge extends AdminController
     public function ask()
     {
         $this->guard('knowledge');
-        $agentId = (int) $this->input->post('agent_id');
-        $query   = (string) $this->input->post('query');
+        $agentIdRaw = trim((string) $this->input->post('agent_id'));
+        $query      = trim((string) $this->input->post('query'));
+
+        // Validate BEFORE ever calling knowledgeAnswer() - an invalid request
+        // must not run a query or create a review-queue escalation for it.
+        $error = $this->validateAsk($agentIdRaw, $query);
+        if ($error) {
+            if ($this->input->is_ajax_request()) {
+                echo json_encode(array('error' => $error['code'], 'message' => $error['message']));
+                return;
+            }
+            set_alert('warning', $error['message']);
+            redirect(admin_url('payplex_ai_agents/knowledge'));
+        }
+
+        $agentId = (int) $agentIdRaw;
         $res = $this->m->knowledgeAnswer($agentId, $query, true, $this->actor());
 
         if ($this->input->is_ajax_request()) {
@@ -132,6 +149,27 @@ class Knowledge extends AdminController
             set_alert('warning', 'No confident permitted answer (score ' . $res['score'] . ') - escalated to the review queue.');
         }
         redirect(admin_url('payplex_ai_agents/knowledge'));
+    }
+
+    /**
+     * Validate an "Ask" test request. Returns ['code'=>..., 'message'=>...] on
+     * failure, or null when the request is good to run.
+     */
+    private function validateAsk($agentIdRaw, $query)
+    {
+        if ($agentIdRaw === '' || !ctype_digit($agentIdRaw) || (int) $agentIdRaw <= 0) {
+            return array('code' => 'agent_id_required', 'message' => 'Enter a valid Agent id to test.');
+        }
+        if (!$this->m->get((int) $agentIdRaw)) {
+            return array('code' => 'agent_not_found', 'message' => 'No agent exists with id ' . $agentIdRaw . '.');
+        }
+        if ($query === '') {
+            return array('code' => 'query_required', 'message' => 'Enter a question to test.');
+        }
+        if (mb_strlen($query) > self::ASK_QUERY_MAX_LENGTH) {
+            return array('code' => 'query_too_long', 'message' => 'Question is too long (max ' . self::ASK_QUERY_MAX_LENGTH . ' characters).');
+        }
+        return null;
     }
 
     private function collect()

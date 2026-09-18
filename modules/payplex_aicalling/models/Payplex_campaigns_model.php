@@ -25,6 +25,22 @@ class Payplex_campaigns_model extends App_Model
         return $this->db->insert_id();
     }
 
+    /**
+     * Whether a campaign with this name already exists (case-insensitive).
+     * Rejected campaigns never ran, so their name is free to reuse.
+     */
+    public function nameExists($name)
+    {
+        $name = trim((string) $name);
+        if ($name === '') {
+            return false;
+        }
+        return (bool) $this->db->where('LOWER(name) =', strtolower($name))
+            ->where('status !=', 'rejected')
+            ->get($this->table)
+            ->num_rows();
+    }
+
     public function get($id)
     {
         return $this->db->where('id', (int) $id)->get($this->table)->row();
@@ -74,25 +90,9 @@ class Payplex_campaigns_model extends App_Model
         return $this->update($id, ['status' => 'rejected', 'reject_reason' => $reason]);
     }
 
-    /** Case-insensitive name match among non-rejected campaigns — a rejected name is free to reuse. */
-    public function findDuplicateByName($name, $excludeId = null)
-    {
-        $name = trim((string) $name);
-        if ($name === '') {
-            return null;
-        }
-        // where()'s escape=false skips escaping the VALUE too, not just the key, so the
-        // value is quoted explicitly here and folded into the condition string itself.
-        $this->db->where('LOWER(name) = ' . $this->db->escape(strtolower($name)), null, false)
-            ->where('status !=', 'rejected');
-        if ($excludeId) {
-            $this->db->where('id !=', (int) $excludeId);
-        }
-        return $this->db->get($this->table)->row();
-    }
-
     public function delete($id)
     {
-        return $this->db->where('id', (int) $id)->delete($this->table);
+        $this->db->where('id', (int) $id)->delete($this->table);
+        return $this->db->affected_rows();
     }
 }

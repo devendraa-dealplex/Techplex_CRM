@@ -15,13 +15,11 @@
       <div class="panel_s" style="background:#f4f8fb"><div class="panel-body">
         <strong>Test: answer from knowledge</strong>
         <?php echo form_open(admin_url('payplex_ai_agents/knowledge/ask'), array('id' => 'kb-ask-form', 'class' => 'form-inline', 'style' => 'margin-top:6px')); ?>
-          <div class="form-group"><input class="form-control input-sm" name="agent_id" placeholder="Agent id" style="width:90px"></div>
-          <div class="form-group"><input class="form-control input-sm" name="query" placeholder="Customer question..." style="width:340px"></div>
+          <div class="form-group"><input class="form-control input-sm" name="agent_id" type="number" min="1" step="1" placeholder="Agent id" required style="width:90px"></div>
+          <div class="form-group"><input class="form-control input-sm" id="kb-ask-query" name="query" placeholder="Customer question..." maxlength="<?php echo (int) Knowledge::ASK_QUERY_MAX_LENGTH; ?>" required style="width:340px"></div>
           <button class="btn btn-info btn-sm" type="submit">Ask</button>
+          <span class="text-muted" style="font-size:11px;margin-left:6px" id="kb-ask-counter">0 / <?php echo (int) Knowledge::ASK_QUERY_MAX_LENGTH; ?></span>
         <?php echo form_close(); ?>
-        <div id="kb-ask-result" class="panel_s" style="display:none;margin-top:10px;border-left:4px solid #ddd">
-          <div class="panel-body" id="kb-ask-result-body"></div>
-        </div>
       </div></div>
 
       <div class="table-responsive"><table class="table table-striped table-bordered">
@@ -42,7 +40,6 @@
             <td style="white-space:nowrap">
               <a href="<?php echo admin_url('payplex_ai_agents/knowledge/edit/' . (int) $e->id); ?>" class="btn btn-default btn-xs">Edit</a>
               <a href="<?php echo admin_url('payplex_ai_agents/knowledge/toggle/' . (int) $e->id); ?>" class="btn btn-default btn-xs"><?php echo (int) $e->is_active === 1 ? 'Disable' : 'Enable'; ?></a>
-              <a href="<?php echo admin_url('payplex_ai_agents/knowledge/destroy/' . (int) $e->id); ?>" class="btn btn-danger btn-xs" onclick="return confirm('Delete this knowledge entry? This cannot be undone.');">Delete</a>
             </td>
           </tr>
         <?php endforeach; endif; ?>
@@ -54,9 +51,20 @@
 <?php init_tail(); ?>
 <script>
     $(function() {
-        var $form   = $('#kb-ask-form');
-        var $result = $('#kb-ask-result');
-        var $body   = $('#kb-ask-result-body');
+        var $form    = $('#kb-ask-form');
+        var $result  = $('#kb-ask-result');
+        var $body    = $('#kb-ask-result-body');
+        var $query   = $('#kb-ask-query');
+        var $counter = $('#kb-ask-counter');
+        var maxLen   = parseInt($query.attr('maxlength'), 10) || 500;
+
+        function updateCounter() {
+            var len = $query.val().length;
+            $counter.text(len + ' / ' + maxLen);
+            $counter.css('color', len > maxLen ? '#a94442' : '');
+        }
+        $query.on('input', updateCounter);
+        updateCounter();
 
         $form.on('submit', function(e) {
             e.preventDefault();
@@ -67,7 +75,13 @@
 
             $.post($form.attr('action'), $form.serialize(), function(res) {
                 $body.empty();
-                if (res.hit) {
+                if (res.error) {
+                    $result.css('border-left-color', '#a94442').show();
+                    $body.append($('<span>').addClass('label label-danger').text('Invalid request'));
+                    $body.append(
+                        $('<p>').addClass('text-muted').css({'font-size': '12px', 'margin-top': '6px'}).text(res.message || 'Please check the form and try again.')
+                    );
+                } else if (res.hit) {
                     $result.css('border-left-color', '#3c763d').show();
                     $body.append(
                         $('<span>').addClass('label label-success').text('Answered'),
