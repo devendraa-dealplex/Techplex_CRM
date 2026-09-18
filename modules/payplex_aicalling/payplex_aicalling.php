@@ -215,6 +215,7 @@ function payplex_aicalling_permissions()
         'campaign_view'      => 'View campaigns',
         'campaign_create'    => 'Create campaigns',
         'campaign_approve'   => 'Approve campaigns (checker)',
+        'campaign_delete'    => 'Delete campaigns',
         'consent_view'       => 'View consent/DND',
         'consent_manage'     => 'Manage consent/DND',
         'reconcile_view'     => 'View failed sync',
