@@ -263,9 +263,10 @@ function app_theme_head_hook()
     ob_start();
     echo get_custom_fields_hyperlink_js_function();
 
-    if (show_recaptcha_in_customers_area()) {
-        echo "<script src='https://www.google.com/recaptcha/api.js'></script>";
-    }
+    // reCAPTCHA script disabled for local development.
+    // if (show_recaptcha_in_customers_area()) {
+    //     echo "<script src='https://www.google.com/recaptcha/api.js'></script>";
+    // }
 
     $isRTL = (is_rtl(true) ? 'true' : 'false');
 

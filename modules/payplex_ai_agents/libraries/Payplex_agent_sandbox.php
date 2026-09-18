@@ -54,6 +54,8 @@ class Payplex_agent_sandbox
         if (empty($tools)) {
             $tools = array('read_input', 'draft_output');
         }
+        $prohibited      = self::listField($agent, 'prohibited_actions');
+        $approvalRequired = self::listField($agent, 'approval_required_actions');
 
         // Deterministic pseudo-confidence from input completeness so the
         // confidence gate is actually exercised in a test.
@@ -78,6 +80,8 @@ class Payplex_agent_sandbox
                 'confidence'           => $confidence,
                 'confidence_threshold' => $threshold,
                 'budget'               => isset($ctx['budget']) ? $ctx['budget'] : array(),
+                'prohibited_actions'        => $prohibited,
+                'approval_required_actions' => $approvalRequired,
             ));
 
             if (empty($verdict['allow'])) {
@@ -96,8 +100,10 @@ class Payplex_agent_sandbox
                 continue;
             }
 
-            // Would this action need approval / escalation in production?
-            $needsApproval = Payplex_agent_safety::isApprovalRequired($tool) || Payplex_agent_safety::isNeverAutonomous($tool);
+            // Would this action need approval / escalation in production? Checks
+            // both the fixed global list AND this agent's own configured
+            // prohibited/approval-required actions.
+            $needsApproval = Payplex_agent_safety::isApprovalRequired($tool, $approvalRequired) || Payplex_agent_safety::isNeverAutonomous($tool, $prohibited);
             if ($confidence < $threshold) {
                 $escalations++;
                 $transcript[] = self::line('tool_call', 'Action "' . $tool . '" simulated; LOW-CONFIDENCE -> would escalate to human in production', 'escalate');
@@ -117,12 +123,18 @@ class Payplex_agent_sandbox
 
     private static function toolList($agent)
     {
-        $tools = isset($agent['allowed_tools']) ? $agent['allowed_tools'] : array();
-        if (is_string($tools)) {
-            $decoded = json_decode($tools, true);
-            $tools = is_array($decoded) ? $decoded : array_filter(array_map('trim', explode(',', $tools)));
+        return self::listField($agent, 'allowed_tools');
+    }
+
+    /** Normalise an agent's list-type field (array, JSON string, or CSV string) to a plain array. */
+    private static function listField($agent, $field)
+    {
+        $list = isset($agent[$field]) ? $agent[$field] : array();
+        if (is_string($list)) {
+            $decoded = json_decode($list, true);
+            $list = is_array($decoded) ? $decoded : array_filter(array_map('trim', explode(',', $list)));
         }
-        return is_array($tools) ? array_values($tools) : array();
+        return is_array($list) ? array_values($list) : array();
     }
 
     private static function estimateConfidence(array $input)

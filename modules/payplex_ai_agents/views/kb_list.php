@@ -14,11 +14,14 @@
 
       <div class="panel_s" style="background:#f4f8fb"><div class="panel-body">
         <strong>Test: answer from knowledge</strong>
-        <?php echo form_open(admin_url('payplex_ai_agents/knowledge/ask'), array('class' => 'form-inline', 'style' => 'margin-top:6px')); ?>
+        <?php echo form_open(admin_url('payplex_ai_agents/knowledge/ask'), array('id' => 'kb-ask-form', 'class' => 'form-inline', 'style' => 'margin-top:6px')); ?>
           <div class="form-group"><input class="form-control input-sm" name="agent_id" placeholder="Agent id" style="width:90px"></div>
           <div class="form-group"><input class="form-control input-sm" name="query" placeholder="Customer question..." style="width:340px"></div>
           <button class="btn btn-info btn-sm" type="submit">Ask</button>
         <?php echo form_close(); ?>
+        <div id="kb-ask-result" class="panel_s" style="display:none;margin-top:10px;border-left:4px solid #ddd">
+          <div class="panel-body" id="kb-ask-result-body"></div>
+        </div>
       </div></div>
 
       <div class="table-responsive"><table class="table table-striped table-bordered">
@@ -39,6 +42,7 @@
             <td style="white-space:nowrap">
               <a href="<?php echo admin_url('payplex_ai_agents/knowledge/edit/' . (int) $e->id); ?>" class="btn btn-default btn-xs">Edit</a>
               <a href="<?php echo admin_url('payplex_ai_agents/knowledge/toggle/' . (int) $e->id); ?>" class="btn btn-default btn-xs"><?php echo (int) $e->is_active === 1 ? 'Disable' : 'Enable'; ?></a>
+              <a href="<?php echo admin_url('payplex_ai_agents/knowledge/destroy/' . (int) $e->id); ?>" class="btn btn-danger btn-xs" onclick="return confirm('Delete this knowledge entry? This cannot be undone.');">Delete</a>
             </td>
           </tr>
         <?php endforeach; endif; ?>
@@ -48,5 +52,51 @@
   </div>
 </div>
 <?php init_tail(); ?>
+<script>
+    $(function() {
+        var $form   = $('#kb-ask-form');
+        var $result = $('#kb-ask-result');
+        var $body   = $('#kb-ask-result-body');
+
+        $form.on('submit', function(e) {
+            e.preventDefault();
+            var $btn = $form.find('button[type="submit"]');
+            $btn.prop('disabled', true).text('Asking...');
+            $body.empty();
+            $result.hide();
+
+            $.post($form.attr('action'), $form.serialize(), function(res) {
+                $body.empty();
+                if (res.hit) {
+                    $result.css('border-left-color', '#3c763d').show();
+                    $body.append(
+                        $('<span>').addClass('label label-success').text('Answered'),
+                        ' ',
+                        $('<span>').addClass('text-muted').css('font-size', '12px').text('score ' + res.score)
+                    );
+                    $body.append($('<h5>').css({margin: '8px 0 4px'}).text(res.title || ''));
+                    if (res.category) {
+                        $body.append($('<span>').addClass('label label-default').text(res.category));
+                    }
+                    $body.append($('<div>').css({'white-space': 'pre-wrap', 'font-size': '13px', 'margin-top': '6px'}).text(res.content || ''));
+                } else {
+                    $result.css('border-left-color', '#8a6d3b').show();
+                    $body.append($('<span>').addClass('label label-warning').text('No confident permitted answer'));
+                    $body.append(
+                        $('<p>').addClass('text-muted').css({'font-size': '12px', 'margin-top': '6px'})
+                            .text('Score ' + res.score + ' · reason: ' + (res.reason || 'n/a') + '. Escalated to the Review Queue.')
+                    );
+                }
+            }, 'json').fail(function() {
+                $body.empty().append($('<span>').addClass('label label-danger').text('Error')).append(
+                    $('<p>').addClass('text-muted').css({'font-size': '12px', 'margin-top': '6px'}).text('Could not reach the server. Please try again.')
+                );
+                $result.css('border-left-color', '#a94442').show();
+            }).always(function() {
+                $btn.prop('disabled', false).text('Ask');
+            });
+        });
+    });
+</script>
 </body>
 </html>

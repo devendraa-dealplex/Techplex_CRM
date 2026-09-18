@@ -46,12 +46,12 @@
                     <?= form_error('password'); ?>
                 </div>
 
-                <?php if (show_recaptcha_in_customers_area()) { ?>
+                <!-- <?php if (show_recaptcha_in_customers_area()) { ?>
                 <div class="g-recaptcha tw-mb-4"
                     data-sitekey="<?= get_option('recaptcha_site_key'); ?>">
                 </div>
                 <?= form_error('g-recaptcha-response'); ?>
-                <?php } ?>
+                <?php } ?> -->
 
                 <div class="checkbox">
                     <input type="checkbox" name="remember" id="remember">

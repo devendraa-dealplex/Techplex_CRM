@@ -105,13 +105,16 @@ class Payplex_agent_lifecycle
 
     /**
      * Maker != checker. The approver must be set and must differ from both the
-     * creator and the submitter. Returns true when allowed, else an error code.
+     * creator and the submitter. If the agent has a specific approver_id
+     * configured, only that staff member may approve it (on top of, not instead
+     * of, the maker != checker rule). Returns true when allowed, else an error code.
      */
     public static function guardApproval(array $context)
     {
-        $actor     = isset($context['actor_id']) ? (int) $context['actor_id'] : 0;
-        $createdBy = isset($context['created_by']) ? (int) $context['created_by'] : 0;
-        $submitted = isset($context['submitted_by']) ? (int) $context['submitted_by'] : 0;
+        $actor      = isset($context['actor_id']) ? (int) $context['actor_id'] : 0;
+        $createdBy  = isset($context['created_by']) ? (int) $context['created_by'] : 0;
+        $submitted  = isset($context['submitted_by']) ? (int) $context['submitted_by'] : 0;
+        $approverId = isset($context['approver_id']) ? (int) $context['approver_id'] : 0;
 
         if ($actor <= 0) {
             return 'approver_required';
@@ -121,6 +124,11 @@ class Payplex_agent_lifecycle
         }
         if ($createdBy > 0 && $actor === $createdBy) {
             return 'maker_checker_violation';
+        }
+        // Only enforced when the agent actually names a specific approver -
+        // leaving it unset keeps the old "any eligible staff member" behaviour.
+        if ($approverId > 0 && $actor !== $approverId) {
+            return 'not_designated_approver';
         }
         return true;
     }

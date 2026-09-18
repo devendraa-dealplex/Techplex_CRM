@@ -30,9 +30,10 @@ class Authentication extends ClientsController
         $this->form_validation->set_rules('password', _l('clients_login_password'), 'required');
         $this->form_validation->set_rules('email', _l('clients_login_email'), 'trim|required|valid_email');
 
-        if (show_recaptcha_in_customers_area()) {
-            $this->form_validation->set_rules('g-recaptcha-response', 'Captcha', 'callback_recaptcha');
-        }
+        // Client login reCAPTCHA is disabled for local development.
+        // if (show_recaptcha_in_customers_area()) {
+        //     $this->form_validation->set_rules('g-recaptcha-response', 'Captcha', 'callback_recaptcha');
+        // }
         if ($this->form_validation->run() !== false) {
             $this->load->model('Authentication_model');
 
@@ -132,9 +133,10 @@ class Authentication extends ClientsController
         $this->form_validation->set_rules('password', _l('clients_register_password'), 'required');
         $this->form_validation->set_rules('passwordr', _l('clients_register_password_repeat'), 'required|matches[password]');
 
-        if (show_recaptcha_in_customers_area()) {
-            $this->form_validation->set_rules('g-recaptcha-response', 'Captcha', 'callback_recaptcha');
-        }
+        // Client registration reCAPTCHA is disabled for local development.
+        // if (show_recaptcha_in_customers_area()) {
+        //     $this->form_validation->set_rules('g-recaptcha-response', 'Captcha', 'callback_recaptcha');
+        // }
 
         $custom_fields = get_custom_fields('customers', [
             'show_on_client_portal' => 1,

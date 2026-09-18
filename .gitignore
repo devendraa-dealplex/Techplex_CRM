@@ -42,3 +42,6 @@ xampp/
 *.tmp
 *.swp
 *.swo
+
+# Local bug tracking file
+bugs.csv

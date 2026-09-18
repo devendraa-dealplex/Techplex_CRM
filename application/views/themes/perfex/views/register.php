@@ -258,14 +258,14 @@
                     placeholder="Your company here">
                 <?php } ?>
 
-                <?php if (show_recaptcha_in_customers_area()) { ?>
+                <!-- <?php if (show_recaptcha_in_customers_area()) { ?>
                 <div class="col-md-12 register-recaptcha">
                     <div class="g-recaptcha"
                         data-sitekey="<?= get_option('recaptcha_site_key'); ?>">
                     </div>
                     <?= form_error('g-recaptcha-response'); ?>
                 </div>
-                <?php } ?>
+                <?php } ?> -->
             </div>
         </div>
         <div class="panel-footer text-right">

@@ -42,7 +42,20 @@
                     <td><span class="label label-<?php echo $a->mode === 'production' ? 'danger' : 'default'; ?>"><?php echo html_escape($a->mode); ?></span></td>
                     <td><?php echo (int) $a->version; ?></td>
                     <td><?php echo ((int) $a->agent_kill === 1) ? '<span class="label label-danger">STOP</span>' : '<span class="text-muted">-</span>'; ?></td>
-                    <td><a href="<?php echo admin_url('payplex_ai_agents/agents/view/' . (int) $a->id); ?>" class="btn btn-default btn-xs">Open</a></td>
+                    <td style="white-space:nowrap">
+                      <a href="<?php echo admin_url('payplex_ai_agents/agents/view/' . (int) $a->id); ?>" class="btn btn-default btn-xs">Open</a>
+                      <?php
+                        // Strip both quote characters from the interpolated name: CI's
+                        // form_open() writes attribute values with no HTML-escaping at
+                        // all (raw '$key="$val"'), so a bare " here would prematurely
+                        // close the onsubmit="..." attribute, and a bare ' would break
+                        // out of the JS string confirm() is wrapped in.
+                        $safeName = str_replace(array('"', "'"), '', (string) $a->name);
+                      ?>
+                      <?php echo form_open(admin_url('payplex_ai_agents/agents/destroy/' . (int) $a->id), array('style' => 'display:inline-block', 'onsubmit' => "return confirm('Permanently delete " . $safeName . "? This cannot be undone.');")); ?>
+                        <button class="btn btn-danger btn-xs" type="submit">Delete</button>
+                      <?php echo form_close(); ?>
+                    </td>
                   </tr>
                 <?php endforeach; endif; ?>
                 </tbody>

@@ -103,14 +103,20 @@ class Payplex_agent_safety
         );
     }
 
-    public static function isApprovalRequired($action)
+    /**
+     * $agentList layers the AGENT'S OWN configured list (its "Approval-required
+     * actions" field) on top of the fixed global list - it can only ADD
+     * restrictions, never remove one of the baseline ones above.
+     */
+    public static function isApprovalRequired($action, array $agentList = array())
     {
-        return in_array($action, self::approvalRequiredActions(), true);
+        return in_array($action, self::approvalRequiredActions(), true) || in_array($action, $agentList, true);
     }
 
-    public static function isNeverAutonomous($action)
+    /** Same layering as isApprovalRequired(), for the agent's "Prohibited actions" field. */
+    public static function isNeverAutonomous($action, array $agentList = array())
     {
-        return in_array($action, self::neverAutonomousActions(), true);
+        return in_array($action, self::neverAutonomousActions(), true) || in_array($action, $agentList, true);
     }
 
     /**
@@ -128,6 +134,8 @@ class Payplex_agent_safety
      *   confidence_threshold float 0..1
      *   action_approved      bool  (a human pre-approved THIS run's action)
      *   budget               ['tokens_used','token_limit','spent','budget','daily_runs','daily_limit']
+     *   prohibited_actions        string[] (agent-specific, layered on neverAutonomousActions())
+     *   approval_required_actions string[] (agent-specific, layered on approvalRequiredActions())
      */
     public static function evaluate($action, array $ctx = array())
     {
@@ -156,14 +164,17 @@ class Payplex_agent_safety
 
         // ---- From here: production mode, real side effects possible. ----
 
+        $agentProhibited = isset($ctx['prohibited_actions']) && is_array($ctx['prohibited_actions']) ? $ctx['prohibited_actions'] : array();
+        $agentApprovalRequired = isset($ctx['approval_required_actions']) && is_array($ctx['approval_required_actions']) ? $ctx['approval_required_actions'] : array();
+
         // 4. Never-autonomous actions can only proceed with an explicit approval
         //    for this exact run.
-        if (self::isNeverAutonomous($action) && empty($ctx['action_approved'])) {
+        if (self::isNeverAutonomous($action, $agentProhibited) && empty($ctx['action_approved'])) {
             return self::deny('action_not_permitted_autonomously', true);
         }
 
         // 5. Approval-required actions need a per-run human approval.
-        if (self::isApprovalRequired($action) && empty($ctx['action_approved'])) {
+        if (self::isApprovalRequired($action, $agentApprovalRequired) && empty($ctx['action_approved'])) {
             return self::deny('approval_required', true);
         }
 
@@ -194,10 +205,18 @@ class Payplex_agent_safety
             return 'token_limit_exceeded';
         }
 
-        $spent  = isset($b['spent']) ? (float) $b['spent'] : 0;
-        $budget = isset($b['budget']) ? (float) $b['budget'] : 0;
-        if ($budget > 0 && $spent >= $budget) {
-            return 'budget_exceeded';
+        // Only judge spend against a budget when a budget was actually supplied
+        // by the caller. array_key_exists (not isset/empty) so an explicit 0 or
+        // negative budget is distinguished from "this caller isn't tracking
+        // spend at all" - an agent explicitly configured with $0 means no spend
+        // is allowed, not "unlimited" (a caller that omits 'budget' entirely,
+        // e.g. a check that only cares about token/daily limits, is unaffected).
+        if (array_key_exists('budget', $b)) {
+            $spent  = isset($b['spent']) ? (float) $b['spent'] : 0;
+            $budget = (float) $b['budget'];
+            if ($budget <= 0 || $spent >= $budget) {
+                return 'budget_exceeded';
+            }
         }
 
         $dailyRuns  = isset($b['daily_runs']) ? (int) $b['daily_runs'] : 0;
@@ -232,9 +251,11 @@ class Payplex_agent_safety
     public static function budgetStatus(array $b, $warnPct = 0.8)
     {
         $pcts = array();
-        $budget = isset($b['budget']) ? (float) $b['budget'] : 0;
-        if ($budget > 0) {
-            $pcts[] = (isset($b['spent']) ? (float) $b['spent'] : 0) / $budget;
+        if (array_key_exists('budget', $b)) {
+            $budget = (float) $b['budget'];
+            // A budget of $0 (or negative) means "no spend allowed", i.e.
+            // already exceeded - not "no limit configured" (see checkBudget()).
+            $pcts[] = $budget > 0 ? (isset($b['spent']) ? (float) $b['spent'] : 0) / $budget : 1.0;
         }
         $tl = isset($b['token_limit']) ? (float) $b['token_limit'] : 0;
         if ($tl > 0) {

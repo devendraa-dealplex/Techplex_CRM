@@ -76,6 +76,18 @@ class Knowledge extends AdminController
         redirect(admin_url('payplex_ai_agents/knowledge'));
     }
 
+    public function destroy($id)
+    {
+        $this->guard('knowledge');
+        $deleted = $this->m->kbDelete((int) $id, $this->actor());
+        if ($deleted) {
+            set_alert('success', 'Knowledge entry deleted.');
+        } else {
+            set_alert('warning', 'Knowledge entry not found.');
+        }
+        redirect(admin_url('payplex_ai_agents/knowledge'));
+    }
+
     public function reindex($id)
     {
         $this->guard('knowledge');
@@ -91,8 +103,31 @@ class Knowledge extends AdminController
         $agentId = (int) $this->input->post('agent_id');
         $query   = (string) $this->input->post('query');
         $res = $this->m->knowledgeAnswer($agentId, $query, true, $this->actor());
+
+        if ($this->input->is_ajax_request()) {
+            $out = array(
+                'hit'   => !empty($res['hit']),
+                'score' => isset($res['score']) ? $res['score'] : 0,
+            );
+            if (!empty($res['hit'])) {
+                $out['title']    = (string) $res['entry']['title'];
+                $out['category'] = (string) $res['entry']['category'];
+                $out['content']  = (string) $res['entry']['content'];
+            } else {
+                $out['reason'] = isset($res['reason']) ? $res['reason'] : 'no_confident_match';
+            }
+            echo json_encode($out);
+            return;
+        }
+
+        // Non-AJAX fallback (e.g. JS disabled): same result via a flash message.
         if (!empty($res['hit'])) {
-            set_alert('success', 'Answered from KB: "' . html_escape($res['entry']['title']) . '" (score ' . $res['score'] . ').');
+            // Wrap the title in single quotes (not double) and strip any literal double
+            // quotes from it - app_js_alerts() embeds this message unescaped inside a
+            // double-quoted JS string, so a bare " here breaks that <script> block and
+            // the toast silently never renders.
+            $safeTitle = str_replace('"', "'", (string) $res['entry']['title']);
+            set_alert('success', "Answered from KB: '" . html_escape($safeTitle) . "' (score " . $res['score'] . ').');
         } else {
             set_alert('warning', 'No confident permitted answer (score ' . $res['score'] . ') - escalated to the review queue.');
         }

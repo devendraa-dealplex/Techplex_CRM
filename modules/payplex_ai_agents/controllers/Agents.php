@@ -81,12 +81,25 @@ class Agents extends AdminController
     {
         $this->guard('create');
         if ($this->input->post()) {
-            $id = $this->m->create($this->collect(), $this->actor());
-            set_alert('success', 'Agent created in Sandbox mode (draft).');
-            redirect(admin_url('payplex_ai_agents/agents/view/' . (int) $id));
+            $data = $this->collect();
+            $errors = $this->validateAgentInput($data);
+            if (empty($errors)) {
+                $id = $this->m->create($data, $this->actor());
+                set_alert('success', 'Agent created in Sandbox mode (draft).');
+                redirect(admin_url('payplex_ai_agents/agents/view/' . (int) $id));
+            }
+            set_alert('warning', implode(' ', $errors));
+            $this->load->view('payplex_ai_agents/agent_form', array(
+                'title'   => 'Create AI Agent',
+                'agent'   => (object) $data,
+                'is_edit' => false,
+                'staff'   => $this->staffList(),
+            ));
+            return;
         }
         $data['title'] = 'Create AI Agent';
         $data['agent'] = null;
+        $data['staff'] = $this->staffList();
         $this->load->view('payplex_ai_agents/agent_form', $data);
     }
 
@@ -98,17 +111,85 @@ class Agents extends AdminController
             show_404();
         }
         if ($this->input->post()) {
-            $res = $this->m->update((int) $id, $this->collect(), $this->actor());
-            if ($res === 'locked') {
-                set_alert('warning', 'Agent is locked in its current status and cannot be edited. Create a new version instead.');
-            } else {
-                set_alert('success', 'Agent updated.');
+            $data = $this->collect();
+            $errors = $this->validateAgentInput($data, (int) $id);
+            if (empty($errors)) {
+                $res = $this->m->update((int) $id, $data, $this->actor());
+                if ($res === 'locked') {
+                    set_alert('warning', 'Agent is locked in its current status and cannot be edited. Create a new version instead.');
+                } else {
+                    set_alert('success', 'Agent updated.');
+                }
+                redirect(admin_url('payplex_ai_agents/agents/view/' . (int) $id));
             }
-            redirect(admin_url('payplex_ai_agents/agents/view/' . (int) $id));
+            set_alert('warning', implode(' ', $errors));
+            $this->load->view('payplex_ai_agents/agent_form', array(
+                'title'   => 'Edit AI Agent',
+                'agent'   => (object) array_merge($data, array('id' => (int) $id)),
+                'is_edit' => true,
+                'staff'   => $this->staffList(),
+            ));
+            return;
         }
         $data['title'] = 'Edit AI Agent';
         $data['agent'] = $agent;
+        $data['staff'] = $this->staffList();
         $this->load->view('payplex_ai_agents/agent_form', $data);
+    }
+
+    /** Active staff list for the Owner/Reviewer/Approver pickers. */
+    private function staffList()
+    {
+        $this->load->model('staff_model');
+        return $this->staff_model->get('', array('active' => 1));
+    }
+
+    /**
+     * Server-side validation - the HTML5 attributes on the form (required,
+     * min/max) are client-side only and trivially bypassed by a direct POST.
+     * Returns an array of human-readable error strings (empty = valid).
+     */
+    private function validateAgentInput($data, $excludeId = 0)
+    {
+        $errors = array();
+
+        if ($data['name'] === '') {
+            $errors[] = 'Name is required.';
+        } elseif (mb_strlen($data['name']) > 191) {
+            $errors[] = 'Name must be 191 characters or fewer.';
+        } elseif ($this->m->agentNameTaken($data['name'], $excludeId)) {
+            // Single-quoted, with any stray quote characters in the name stripped:
+            // set_alert()'s toast embeds this message unescaped inside a
+            // double-quoted JS string (see app_js_alerts()), so a raw " here
+            // would break it exactly like the Knowledge Base "Ask" bug did.
+            $errors[] = "An agent named '" . str_replace(array('"', "'"), '', $data['name']) . "' already exists - names must be unique.";
+        }
+
+        if ($data['confidence_threshold'] < 0 || $data['confidence_threshold'] > 1) {
+            $errors[] = 'Confidence threshold must be between 0 and 1.';
+        }
+
+        $nonNegativeLabels = array(
+            'retry_limit'            => 'Retry limit',
+            'daily_execution_limit'  => 'Daily execution limit',
+            'token_limit'            => 'Token limit',
+            'daily_budget'           => 'Daily budget',
+            'monthly_budget'         => 'Monthly budget',
+        );
+        foreach ($nonNegativeLabels as $f => $label) {
+            if ($data[$f] < 0) {
+                $errors[] = $label . ' cannot be negative.';
+            }
+        }
+
+        $staffLabels = array('owner_id' => 'Owner', 'reviewer_id' => 'Reviewer', 'approver_id' => 'Approver');
+        foreach ($staffLabels as $f => $label) {
+            if ($data[$f] > 0 && !$this->m->staffExists($data[$f])) {
+                $errors[] = $label . ' staff id ' . $data[$f] . ' does not match an active staff member.';
+            }
+        }
+
+        return $errors;
     }
 
     /** Collect + normalise form fields into a config array. */
@@ -207,9 +288,13 @@ class Agents extends AdminController
         if (!empty($res['ok'])) {
             set_alert('success', 'Agent moved to "' . $res['to'] . '".');
         } else {
-            $msg = $res['error'] === 'maker_checker_violation'
-                ? 'Blocked: the approver must be different from the creator and submitter (maker-checker).'
-                : 'Action not allowed: ' . $res['error'];
+            if ($res['error'] === 'maker_checker_violation') {
+                $msg = 'Blocked: the approver must be different from the creator and submitter (maker-checker).';
+            } elseif ($res['error'] === 'not_designated_approver') {
+                $msg = 'Blocked: this agent has a specific approver configured - only that staff member may approve it.';
+            } else {
+                $msg = 'Action not allowed: ' . $res['error'];
+            }
             set_alert('warning', $msg);
         }
         redirect(admin_url('payplex_ai_agents/agents/view/' . (int) $id));
@@ -225,6 +310,18 @@ class Agents extends AdminController
             set_alert('warning', 'Cannot activate in production: ' . $res['error'] . '. An agent must be approved by a different user first.');
         }
         redirect(admin_url('payplex_ai_agents/agents/view/' . (int) $id));
+    }
+
+    public function destroy($id)
+    {
+        $this->guard('edit');
+        $deleted = $this->m->deleteAgent((int) $id, $this->actor());
+        if ($deleted) {
+            set_alert('success', 'Agent deleted.');
+            redirect(admin_url('payplex_ai_agents/agents'));
+        }
+        set_alert('warning', 'Agent not found.');
+        redirect(admin_url('payplex_ai_agents/agents'));
     }
 
     public function kill($id)

@@ -45,6 +45,9 @@ function jlist($v) { return is_array($v) ? implode(', ', $v) : (string) $v; }
           <a href="<?php echo admin_url('payplex_ai_agents/agents/edit/' . (int) $agent->id); ?>" class="btn btn-default btn-sm">Edit</a>
           <a href="<?php echo admin_url('payplex_ai_agents/agents/clone_agent/' . (int) $agent->id); ?>" class="btn btn-default btn-sm">Clone</a>
           <a href="<?php echo admin_url('payplex_ai_agents/agents'); ?>" class="btn btn-default btn-sm">Back</a>
+          <?php echo form_open(admin_url('payplex_ai_agents/agents/destroy/' . (int) $agent->id), array('style' => 'display:inline-block;margin:2px', 'onsubmit' => "return confirm('Permanently delete this agent? This removes its config, version history and run history and cannot be undone. (Audit trail, decisions and escalations stay on record.)');")); ?>
+            <button class="btn btn-sm btn-danger" type="submit">Delete</button>
+          <?php echo form_close(); ?>
         </div>
       </div>
 
@@ -78,13 +81,27 @@ function jlist($v) { return is_array($v) ? implode(', ', $v) : (string) $v; }
             <tr><td><strong>System prompt</strong></td><td><?php echo nl2br(html_escape((string) $agent->system_prompt)); ?></td></tr>
             <tr><td><strong>Allowed tools</strong></td><td><?php echo html_escape(jlist($agent->allowed_tools)); ?></td></tr>
             <tr><td><strong>Triggers</strong></td><td><?php echo html_escape(jlist($agent->triggers)); ?></td></tr>
-            <tr><td><strong>Prohibited actions</strong></td><td><?php echo html_escape(jlist($agent->prohibited_actions)); ?></td></tr>
-            <tr><td><strong>Approval-required</strong></td><td><?php echo html_escape(jlist($agent->approval_required_actions)); ?></td></tr>
+            <tr><td><strong>Prohibited actions</strong></td><td><?php echo html_escape(jlist($agent->prohibited_actions)); ?> <span class="text-muted" style="font-size:11px">(enforced, on top of the built-in never-autonomous list)</span></td></tr>
+            <tr><td><strong>Approval-required</strong></td><td><?php echo html_escape(jlist($agent->approval_required_actions)); ?> <span class="text-muted" style="font-size:11px">(enforced, on top of the built-in approval-required list)</span></td></tr>
             <tr><td><strong>Confidence threshold</strong></td><td><?php echo html_escape((string) $agent->confidence_threshold); ?></td></tr>
             <tr><td><strong>Limits</strong></td><td>tokens <?php echo (int) $agent->token_limit; ?> · daily runs <?php echo (int) $agent->daily_execution_limit; ?> · retry <?php echo (int) $agent->retry_limit; ?></td></tr>
-            <tr><td><strong>Budget</strong></td><td>$<?php echo html_escape((string) $agent->daily_budget); ?>/day · $<?php echo html_escape((string) $agent->monthly_budget); ?>/mo</td></tr>
-            <tr><td><strong>Owner / Reviewer / Approver</strong></td><td><?php echo (int) $agent->owner_id; ?> / <?php echo (int) $agent->reviewer_id; ?> / <?php echo (int) $agent->approver_id; ?></td></tr>
-            <tr><td><strong>Created by / Submitted by / Approved by</strong></td><td><?php echo (int) $agent->created_by; ?> / <?php echo (int) $agent->submitted_by; ?> / <?php echo (int) $agent->approved_by; ?></td></tr>
+            <tr><td><strong>Budget</strong></td><td>$<?php echo html_escape((string) $agent->daily_budget); ?>/day · $<?php echo html_escape((string) $agent->monthly_budget); ?>/mo <span class="text-muted" style="font-size:11px">($0 = no spend allowed)</span></td></tr>
+            <tr><td><strong>Schedule</strong></td><td>
+                <?php echo html_escape((string) $agent->working_days) ?: '<span class="text-muted">any day</span>'; ?> ·
+                <?php echo html_escape((string) $agent->working_hours) ?: '<span class="text-muted">any hour</span>'; ?> ·
+                <?php echo html_escape((string) $agent->customer_timezone) ?: '<span class="text-muted">no timezone set</span>'; ?>
+                <span class="text-muted" style="font-size:11px">(not yet enforced by any runner)</span>
+            </td></tr>
+            <tr><td><strong>Owner / Reviewer / Approver</strong></td><td>
+                <?php echo (int) $agent->owner_id > 0 ? html_escape(get_staff_full_name($agent->owner_id)) : '<span class="text-muted">none</span>'; ?> /
+                <?php echo (int) $agent->reviewer_id > 0 ? html_escape(get_staff_full_name($agent->reviewer_id)) : '<span class="text-muted">none</span>'; ?> /
+                <?php echo (int) $agent->approver_id > 0 ? html_escape(get_staff_full_name($agent->approver_id)) : '<span class="text-muted">any eligible staff</span>'; ?>
+            </td></tr>
+            <tr><td><strong>Created by / Submitted by / Approved by</strong></td><td>
+                <?php echo (int) $agent->created_by > 0 ? html_escape(get_staff_full_name($agent->created_by)) : '<span class="text-muted">-</span>'; ?> /
+                <?php echo (int) $agent->submitted_by > 0 ? html_escape(get_staff_full_name($agent->submitted_by)) : '<span class="text-muted">-</span>'; ?> /
+                <?php echo (int) $agent->approved_by > 0 ? html_escape(get_staff_full_name($agent->approved_by)) : '<span class="text-muted">-</span>'; ?>
+            </td></tr>
           </table>
         </div></div>
       </div>
