@@ -25,6 +25,22 @@ class Payplex_campaigns_model extends App_Model
         return $this->db->insert_id();
     }
 
+    /**
+     * Whether a campaign with this name already exists (case-insensitive).
+     * Rejected campaigns never ran, so their name is free to reuse.
+     */
+    public function nameExists($name)
+    {
+        $name = trim((string) $name);
+        if ($name === '') {
+            return false;
+        }
+        return (bool) $this->db->where('LOWER(name) =', strtolower($name))
+            ->where('status !=', 'rejected')
+            ->get($this->table)
+            ->num_rows();
+    }
+
     public function get($id)
     {
         return $this->db->where('id', (int) $id)->get($this->table)->row();
@@ -72,5 +88,11 @@ class Payplex_campaigns_model extends App_Model
     public function reject($id, $reason)
     {
         return $this->update($id, ['status' => 'rejected', 'reject_reason' => $reason]);
+    }
+
+    public function delete($id)
+    {
+        $this->db->where('id', (int) $id)->delete($this->table);
+        return $this->db->affected_rows();
     }
 }

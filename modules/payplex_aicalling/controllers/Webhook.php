@@ -162,8 +162,29 @@ class Webhook extends App_Controller
         if ($callId) {
             $this->aicalling_model->recordEvent($callId, $p['event_id'], $p['event'], $sequence, $p['occurred_at'] ?? null, $correlation, $p);
         }
+        if ($call && !empty($update['callback_date'])) {
+            $this->createCallbackReminder($call, $update['callback_date']);
+        }
 
         $this->payplex_audit_model->log('webhook.' . $p['event'], 'call', $sonivoCallId, null, $update ?: $data, $correlation);
+    }
+
+    /** callback_date was captured but never acted on — this is what turns it into a follow-up. */
+    private function createCallbackReminder($call, $callbackDate)
+    {
+        $ts = strtotime((string) $callbackDate);
+        if (!$ts || !$call->crm_lead_id || !$call->staff_id) {
+            return;
+        }
+        $this->db->insert(db_prefix() . 'reminders', [
+            'date'            => date('Y-m-d H:i:s', $ts),
+            'description'     => 'AI call requested a callback (call #' . (int) $call->id . ').',
+            'staff'           => (int) $call->staff_id,
+            'creator'         => (int) $call->staff_id,
+            'rel_id'          => (int) $call->crm_lead_id,
+            'rel_type'        => 'lead',
+            'notify_by_email' => 0,
+        ]);
     }
 
     private function server($k)

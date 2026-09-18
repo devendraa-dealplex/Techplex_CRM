@@ -44,7 +44,7 @@
       </div>
     <?php endif; ?>
     <p class="text-muted">Secrets are encrypted at rest. Provider (Twilio/Plivo/…) keys are <b>never</b> stored here — only the scoped Sonivo service credential.</p>
-    <?php echo form_open(admin_url('payplex_aicalling/aicalling/settings')); ?>
+    <?php echo form_open(admin_url('payplex_aicalling/aicalling/settings'), ['id' => 'pp-settings-form']); ?>
       <div class="form-group"><label>Sonivo Base URL (HTTPS)</label>
         <input class="form-control" name="base_url" value="<?php echo html_escape(get_option('payplex_aicalling_base_url')); ?>" placeholder="https://calls.example.com"></div>
       <?php
@@ -103,6 +103,8 @@
         <div class="col-sm-6 form-group"><label>Read timeout (s)</label>
           <input class="form-control" name="timeout_read" value="<?php echo html_escape(get_option('payplex_aicalling_timeout_read') ?: 15); ?>"></div>
       </div>
+      <div class="form-group"><label>USD &rarr; INR rate <small class="text-muted">(for the dashboard balance display only; leave blank to show USD as reported)</small></label>
+        <input class="form-control" name="usd_inr_rate" placeholder="e.g. 83" value="<?php echo html_escape(get_option('payplex_aicalling_usd_inr_rate')); ?>"></div>
       <hr>
       <h5 class="bold">Permitted calling window</h5>
       <?php
@@ -317,12 +319,14 @@
           place calls &mdash; add an account budget below if you want a hard overall cap.
         </div>
       <?php endif; ?>
-      <div class="row">
-        <div class="col-sm-6 form-group"><label>Account budget per month</label>
-          <input class="form-control" name="account_budget" placeholder="required — no default"
-                 value="<?php echo html_escape(get_option('payplex_aicalling_account_budget')); ?>"></div>
-        <div class="col-sm-6 form-group"><label>Per-agent budget per month <small class="text-muted">(optional)</small></label>
-          <input class="form-control" name="agent_budget"
+      <div class="row" id="pp-budget-row">
+        <div class="col-sm-6 form-group" id="pp-account-budget-group"><label>Account budget per month</label>
+          <input class="form-control" id="pp-account-budget" name="account_budget" placeholder="required if no per-agent budget is set"
+                 value="<?php echo html_escape(get_option('payplex_aicalling_account_budget')); ?>">
+          <span class="help-block" style="display:none;color:#dc3545;">At least one of Account budget or Per-agent budget must be set — calling stays refused otherwise.</span>
+        </div>
+        <div class="col-sm-6 form-group" id="pp-agent-budget-group"><label>Per-agent budget per month <small class="text-muted">(optional if Account budget is set)</small></label>
+          <input class="form-control" id="pp-agent-budget" name="agent_budget"
                  value="<?php echo html_escape(get_option('payplex_aicalling_agent_budget')); ?>"></div>
       </div>
 
@@ -364,4 +368,29 @@
     <?php echo form_close(); ?>
   </div></div>
 </div></div></div></div>
-<?php init_tail(); ?></body></html>
+<?php init_tail(); ?>
+<script>
+(function ($) {
+  // At least one of account_budget / agent_budget is required — same rule the
+  // backend already enforces (Payplex_call_limits::budget()), surfaced before submit
+  // instead of only after reload via the red banner above.
+  function budgetValid() {
+    return $.trim($('#pp-account-budget').val()) !== '' || $.trim($('#pp-agent-budget').val()) !== '';
+  }
+  function showBudgetError(show) {
+    $('#pp-account-budget-group, #pp-agent-budget-group').toggleClass('has-error', show);
+    $('#pp-account-budget-group .help-block').toggle(show);
+  }
+  $('#pp-settings-form').on('submit', function (e) {
+    if (!budgetValid()) {
+      e.preventDefault();
+      showBudgetError(true);
+      $('#pp-account-budget').focus();
+    }
+  });
+  $('#pp-account-budget, #pp-agent-budget').on('input', function () {
+    if (budgetValid()) { showBudgetError(false); }
+  });
+})(jQuery);
+</script>
+</body></html>

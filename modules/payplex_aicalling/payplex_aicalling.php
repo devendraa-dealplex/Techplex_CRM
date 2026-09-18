@@ -203,18 +203,12 @@ function payplex_aicalling_permissions()
         'cancel'             => 'Cancel scheduled call',
         'retry'              => 'Retry failed call',
         'recording_access'   => 'Access recordings',
-        /*
-         * 'transcript_access' is deliberately NOT registered. The webhook
-         * records a transcript_available flag and nothing else in the module
-         * ever serves a transcript, so there is no access to control. Offering
-         * the permission told an administrator they had restricted something
-         * that does not exist. Register it again with the endpoint that needs
-         * it, not before.
-         */
+        'transcript_access'  => 'Access call transcripts',
         'settings'           => 'Manage integration settings',
         'campaign_view'      => 'View campaigns',
         'campaign_create'    => 'Create campaigns',
         'campaign_approve'   => 'Approve campaigns (checker)',
+        'campaign_delete'    => 'Delete campaigns',
         'consent_view'       => 'View consent/DND',
         'consent_manage'     => 'Manage consent/DND',
         'reconcile_view'     => 'View failed sync',

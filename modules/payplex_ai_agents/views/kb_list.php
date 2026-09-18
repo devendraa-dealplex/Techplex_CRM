@@ -20,9 +20,6 @@
           <button class="btn btn-info btn-sm" type="submit">Ask</button>
           <span class="text-muted" style="font-size:11px;margin-left:6px" id="kb-ask-counter">0 / <?php echo (int) Knowledge::ASK_QUERY_MAX_LENGTH; ?></span>
         <?php echo form_close(); ?>
-        <div id="kb-ask-result" class="panel_s" style="display:none;margin-top:10px;border-left:4px solid #ddd">
-          <div class="panel-body" id="kb-ask-result-body"></div>
-        </div>
       </div></div>
 
       <div class="table-responsive"><table class="table table-striped table-bordered">
@@ -43,7 +40,6 @@
             <td style="white-space:nowrap">
               <a href="<?php echo admin_url('payplex_ai_agents/knowledge/edit/' . (int) $e->id); ?>" class="btn btn-default btn-xs">Edit</a>
               <a href="<?php echo admin_url('payplex_ai_agents/knowledge/toggle/' . (int) $e->id); ?>" class="btn btn-default btn-xs"><?php echo (int) $e->is_active === 1 ? 'Disable' : 'Enable'; ?></a>
-              <a href="<?php echo admin_url('payplex_ai_agents/knowledge/destroy/' . (int) $e->id); ?>" class="btn btn-danger btn-xs" onclick="return confirm('Delete this knowledge entry? This cannot be undone.');">Delete</a>
             </td>
           </tr>
         <?php endforeach; endif; ?>

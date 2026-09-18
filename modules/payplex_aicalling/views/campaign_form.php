@@ -21,14 +21,39 @@
       </div>
       <div class="form-group"><label>Objective</label>
         <input class="form-control" name="objective" placeholder="e.g. Re-engage cold leads"></div>
-      <div class="form-group"><label>Audience filter</label>
-        <input class="form-control" name="audience" placeholder="e.g. status=cold AND source=website"></div>
-      <div class="form-group"><label>Estimated targets</label>
-        <input class="form-control" name="total_targets" type="number" min="0" value="0"></div>
+      <div class="row">
+        <div class="col-sm-6 form-group"><label>Lead status</label>
+          <select class="form-control" name="status_id" id="pp-status">
+            <option value="0">Any</option>
+            <?php foreach ($statuses as $s): ?>
+              <option value="<?php echo (int) $s['id']; ?>"><?php echo html_escape($s['name']); ?></option>
+            <?php endforeach; ?>
+          </select></div>
+        <div class="col-sm-6 form-group"><label>Lead source</label>
+          <select class="form-control" name="source_id" id="pp-source">
+            <option value="0">Any</option>
+            <?php foreach ($sources as $s): ?>
+              <option value="<?php echo (int) $s['id']; ?>"><?php echo html_escape($s['name']); ?></option>
+            <?php endforeach; ?>
+          </select></div>
+      </div>
+      <p><b><span id="pp-aud-count">—</span></b> lead(s) match this audience.</p>
       <div class="pp-webhook-hint">Consent/DND/calling-hours are re-checked per call at run time — contacts failing any check are skipped automatically.</div>
       <button class="btn btn-primary" type="submit">Submit for approval</button>
       <a class="btn btn-link" href="<?php echo admin_url('payplex_aicalling/campaigns'); ?>">Cancel</a>
     <?php echo form_close(); ?>
   </div></div>
 </div></div></div></div>
-<?php init_tail(); ?></body></html>
+<?php init_tail(); ?>
+<script>
+window.PP_AUD_URL = "<?php echo admin_url('payplex_aicalling/campaigns/audience_count'); ?>";
+(function ($) {
+  function refresh() {
+    $.getJSON(window.PP_AUD_URL, { status_id: $('#pp-status').val(), source_id: $('#pp-source').val() })
+      .done(function (r) { $('#pp-aud-count').text(r.count); });
+  }
+  $('#pp-status, #pp-source').on('change', refresh);
+  $(refresh);
+})(jQuery);
+</script>
+</body></html>

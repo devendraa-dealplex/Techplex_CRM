@@ -11,10 +11,10 @@
     </div>
     <div class="table-responsive">
       <table class="table pp-table">
-        <thead><tr><th>When</th><th>Lead</th><th>Dir</th><th>Status</th><th>Disposition</th><th>Dur</th><th>Cost</th><th>Sentiment</th></tr></thead>
+        <thead><tr><th>When</th><th>Lead</th><th>Dir</th><th>Status</th><th>Disposition</th><th>Dur</th><th>Cost</th><th>Sentiment</th><th></th></tr></thead>
         <tbody>
         <?php if (empty($calls)): ?>
-          <tr><td colspan="8" class="pp-empty">No calls match this filter.</td></tr>
+          <tr><td colspan="9" class="pp-empty">No calls match this filter.</td></tr>
         <?php else: foreach ($calls as $c): ?>
           <tr>
             <td><?php echo _dt($c->created_at); ?></td>
@@ -25,6 +25,12 @@
             <td><?php echo $c->duration_sec ? gmdate('i:s',$c->duration_sec) : '—'; ?></td>
             <td><?php echo $c->cost !== null ? app_format_money($c->cost,$c->currency) : '—'; ?></td>
             <td><?php echo html_escape($c->sentiment ?: '—'); ?></td>
+            <td>
+              <a class="btn btn-xs btn-default" href="<?php echo admin_url('payplex_aicalling/aicalling/call_detail/'.$c->id); ?>">Details</a>
+              <?php if ($c->transcript_available && (is_admin() || staff_can('transcript_access','payplex_aicalling'))): ?>
+                <a class="btn btn-xs btn-default" href="<?php echo admin_url('payplex_aicalling/aicalling/transcript/'.$c->id); ?>">Transcript</a>
+              <?php endif; ?>
+            </td>
           </tr>
         <?php endforeach; endif; ?>
         </tbody>

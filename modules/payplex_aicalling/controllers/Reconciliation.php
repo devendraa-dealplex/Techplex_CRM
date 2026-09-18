@@ -28,7 +28,8 @@ class Reconciliation extends AdminController
             access_denied('payplex_aicalling reconcile');
         }
         $data['title']  = 'Failed Sync & Reconciliation';
-        $data['outbox'] = $this->db->where_in('status', ['pending', 'failed'])
+        // 'abandoned' included so a permanently-failed item isn't invisible to the human who must act on it.
+        $data['outbox'] = $this->db->where_in('status', ['pending', 'failed', 'abandoned'])
             ->order_by('created_at', 'DESC')->limit(100)
             ->get(db_prefix() . 'payplex_outbox')->result();
         $data['badWebhooks'] = $this->db->group_start()
@@ -62,6 +63,29 @@ class Reconciliation extends AdminController
         }
         $this->payplex_audit_model->log('reconcile.manual', 'integration', null, null, ['checked' => count($ids), 'updated' => $updated]);
         set_alert('success', "Reconciliation done — {$updated} call(s) updated.");
+        redirect(admin_url('payplex_aicalling/reconciliation'));
+    }
+
+    /** Manually re-queue one abandoned outbox item (human override, audited). */
+    public function retry_outbox_item($id)
+    {
+        if (!$this->cap('reconcile_run')) {
+            ajax_access_denied();
+        }
+        $row = $this->db->where('id', (int) $id)->get(db_prefix() . 'payplex_outbox')->row();
+        if (!$row || $row->status !== 'abandoned') {
+            set_alert('warning', 'That item is not in an abandoned state.');
+            redirect(admin_url('payplex_aicalling/reconciliation'));
+            return;
+        }
+        $this->db->where('id', (int) $id)->update(db_prefix() . 'payplex_outbox', [
+            'status'        => 'pending',
+            'next_retry_at' => null,
+            'updated_at'    => date('Y-m-d H:i:s'),
+        ]);
+        $this->payplex_audit_model->log('outbox.manual_requeue', 'outbox', (int) $id,
+            ['status' => 'abandoned'], ['status' => 'pending']);
+        set_alert('success', 'Item requeued — it will be retried on the next reconciliation cycle.');
         redirect(admin_url('payplex_aicalling/reconciliation'));
     }
 }
