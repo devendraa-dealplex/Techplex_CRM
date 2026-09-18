@@ -43,6 +43,21 @@ class Campaigns extends AdminController
             ajax_access_denied();
         }
         if ($this->input->post()) {
+            $name = (string) $this->input->post('name');
+            $dup  = $this->payplex_campaigns_model->findDuplicateByName($name);
+            if ($dup) {
+                /*
+                 * Blocked here, not just warned about in the UI — a client-side-only
+                 * check can be skipped (JS off, direct POST, two people submitting at
+                 * once), and "prevent silent creation" means the server has to be the
+                 * one that actually refuses, not just the form that asks nicely.
+                 */
+                set_alert('warning', 'A campaign named "' . html_escape($name) . '" already exists '
+                    . '(status: ' . html_escape($dup->status) . '). Choose a different name, or open the '
+                    . 'existing campaign instead.');
+                redirect(admin_url('payplex_aicalling/campaigns/create'));
+                return;
+            }
             $statusId = (int) $this->input->post('status_id');
             $sourceId = (int) $this->input->post('source_id');
             $total    = $this->audienceCount($statusId, $sourceId);
@@ -65,6 +80,41 @@ class Campaigns extends AdminController
             'statuses' => $this->leads_model->get_status(),
             'sources'  => $this->leads_model->get_source(),
         ]);
+    }
+
+    /** Live duplicate-name warning for the create form — the server's create() re-checks and blocks regardless. */
+    public function check_duplicate()
+    {
+        if (!$this->cap('campaign_create')) {
+            ajax_access_denied();
+        }
+        $dup = $this->payplex_campaigns_model->findDuplicateByName((string) $this->input->get('name'));
+        echo json_encode(['duplicate' => (bool) $dup, 'status' => $dup ? $dup->status : null]);
+    }
+
+    /** Delete a campaign that isn't currently live on the backend. */
+    public function delete($id)
+    {
+        if (!$this->cap('campaign_create')) {
+            ajax_access_denied();
+        }
+        $c = $this->payplex_campaigns_model->get($id);
+        if (!$c) {
+            set_alert('warning', 'Campaign not found.');
+            redirect(admin_url('payplex_aicalling/campaigns'));
+            return;
+        }
+        if ($c->status === 'running') {
+            set_alert('warning', 'A running campaign cannot be deleted — it is already live on Sonivo. '
+                . 'Let it complete, or contact Sonivo to stop it, before removing the record.');
+            redirect(admin_url('payplex_aicalling/campaigns'));
+            return;
+        }
+        $this->payplex_campaigns_model->delete($id);
+        $this->payplex_audit_model->log('campaign.deleted', 'campaign', $id,
+            ['status' => $c->status, 'name' => $c->name], null);
+        set_alert('success', 'Campaign deleted.');
+        redirect(admin_url('payplex_aicalling/campaigns'));
     }
 
     /** Live audience count for the picker preview and the actual total_targets at submit. */
