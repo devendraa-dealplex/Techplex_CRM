@@ -149,15 +149,15 @@ class Forms extends ClientsController
                     }
                 }
 
-                if (show_recaptcha() && $form->recaptcha == 1) {
-                    if (! do_recaptcha_validation($post_data['g-recaptcha-response'])) {
-                        echo json_encode(['success' => false,
-                            'message'               => _l('recaptcha_error'),
-                        ]);
+                // if (show_recaptcha() && $form->recaptcha == 1) {
+                    // if (! do_recaptcha_validation($post_data['g-recaptcha-response'])) {
+                    //     echo json_encode(['success' => false,
+                    //         'message'               => _l('recaptcha_error'),
+                    //     ]);
 
-                        exit;
-                    }
-                }
+                    //     exit;
+                    // }
+                // }
 
                 if (isset($post_data['g-recaptcha-response'])) {
                     unset($post_data['g-recaptcha-response']);
@@ -317,16 +317,16 @@ class Forms extends ClientsController
                     }
                 }
 
-                if (show_recaptcha() && $form->recaptcha == 1) {
-                    if (! do_recaptcha_validation($post_data['g-recaptcha-response'])) {
-                        echo json_encode([
-                            'success' => false,
-                            'message' => _l('recaptcha_error'),
-                        ]);
+                // if (show_recaptcha() && $form->recaptcha == 1) {
+                    // if (! do_recaptcha_validation($post_data['g-recaptcha-response'])) {
+                    //     echo json_encode([
+                    //         'success' => false,
+                    //         'message' => _l('recaptcha_error'),
+                    //     ]);
 
-                        exit;
-                    }
-                }
+                    //     exit;
+                    // }
+                // }
 
                 if (isset($post_data['g-recaptcha-response'])) {
                     unset($post_data['g-recaptcha-response']);
@@ -763,16 +763,16 @@ class Forms extends ClientsController
                 }
             }
 
-            if (show_recaptcha() && $form->recaptcha == 1) {
-                if (! do_recaptcha_validation($post_data['g-recaptcha-response'])) {
-                    echo json_encode([
-                        'success' => false,
-                        'message' => _l('recaptcha_error'),
-                    ]);
+            // if (show_recaptcha() && $form->recaptcha == 1) {
+                // if (! do_recaptcha_validation($post_data['g-recaptcha-response'])) {
+                //     echo json_encode([
+                //         'success' => false,
+                //         'message' => _l('recaptcha_error'),
+                //     ]);
 
-                    exit;
-                }
-            }
+                //     exit;
+                // }
+            // }
 
             $post_data = [
                 'email'      => $post_data['email'],

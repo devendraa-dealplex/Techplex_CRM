@@ -203,6 +203,18 @@ class Aicalling_model extends App_Model
         return $row && $row->maxseq !== null ? (int) $row->maxseq : -1;
     }
 
+    /**
+     * A call's full event history in the order they occurred, for the call
+     * detail / timeline view. Sequence is the backend's own ordering; id is
+     * the tiebreaker for events recorded with an equal or missing sequence.
+     */
+    public function eventsForCall($callId)
+    {
+        return $this->db->where('call_id', (int) $callId)
+            ->order_by('sequence', 'ASC')->order_by('id', 'ASC')
+            ->get($this->tEvents)->result();
+    }
+
     public function recordEvent($callId, $eventId, $event, $sequence, $occurredAt, $correlationId, $payload)
     {
         $this->db->insert($this->tEvents, [
