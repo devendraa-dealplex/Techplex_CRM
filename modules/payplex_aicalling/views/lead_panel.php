@@ -15,7 +15,8 @@ if ($canConsentView && $leadId) {
     $consent = $this->payplex_consent_model->current('lead', $leadId, 'call');
 }
 ?>
-<div class="pp-lead-panel" data-lead="<?php echo (int) $leadId; ?>">
+<div class="pp-lead-panel" data-lead="<?php echo (int) $leadId; ?>"
+     data-phone="<?php echo html_escape(isset($lead->phonenumber) ? $lead->phonenumber : ''); ?>">
   <?php if (!$canCall): ?>
     <p class="text-muted">You do not have permission to place AI calls.</p>
   <?php else: ?>
@@ -59,8 +60,8 @@ if ($canConsentView && $leadId) {
       </div>
     </div>
     <div class="form-group">
-      <label>Objective</label>
-      <input type="text" class="form-control pp-objective" placeholder="e.g. Follow up on Pro plan pricing">
+      <label>Objective / Script *</label>
+      <input type="text" class="form-control pp-objective" placeholder="e.g. Follow up on Pro plan pricing" required>
     </div>
     <button class="btn btn-primary btn-sm pp-call-submit">Place call</button>
     <button class="btn btn-link btn-sm pp-call-cancel">Cancel</button>

@@ -43,19 +43,46 @@ class Campaigns extends AdminController
             ajax_access_denied();
         }
         if ($this->input->post()) {
-            $statusId = (int) $this->input->post('status_id');
-            $sourceId = (int) $this->input->post('source_id');
+            $name      = trim((string) $this->input->post('name'));
+            $objective = trim((string) $this->input->post('objective'));
+            $rawStatus = $this->input->post('status_id');
+            $rawSource = $this->input->post('source_id');
+
+            if ($name === '') {
+                set_alert('warning', 'Campaign name is required.');
+                redirect(admin_url('payplex_aicalling/campaigns/create'));
+                return;
+            }
+            if ($objective === '') {
+                set_alert('warning', 'A call script/objective is required.');
+                redirect(admin_url('payplex_aicalling/campaigns/create'));
+                return;
+            }
+            if (!is_numeric($rawStatus) || (int) $rawStatus < 0 || !is_numeric($rawSource) || (int) $rawSource < 0) {
+                set_alert('warning', 'Lead status/source filter is invalid.');
+                redirect(admin_url('payplex_aicalling/campaigns/create'));
+                return;
+            }
+
+            $statusId = (int) $rawStatus;
+            $sourceId = (int) $rawSource;
             $total    = $this->audienceCount($statusId, $sourceId);
+            if ($total <= 0) {
+                set_alert('warning', 'No leads match the selected Status/Source filter. Choose a different filter before submitting.');
+                redirect(admin_url('payplex_aicalling/campaigns/create'));
+                return;
+            }
+
             $id = $this->payplex_campaigns_model->create([
-                'name'          => $this->input->post('name'),
+                'name'          => $name,
                 'agent_id'      => $this->input->post('agent_id'),
                 'language'      => $this->input->post('language') ?: 'en-IN',
-                'objective'     => $this->input->post('objective'),
+                'objective'     => $objective,
                 'audience_json' => json_encode(['status_id' => $statusId ?: null, 'source_id' => $sourceId ?: null]),
                 'total_targets' => $total,
             ]);
             $this->payplex_audit_model->log('campaign.created', 'campaign', $id, null,
-                ['name' => $this->input->post('name'), 'targets' => $total]);
+                ['name' => $name, 'targets' => $total]);
             set_alert('success', "Campaign submitted for approval ({$total} lead(s) targeted).");
             redirect(admin_url('payplex_aicalling/campaigns'));
         }

@@ -174,6 +174,8 @@ class Payplex_call_limits
             'call_in_flight'          => 'A call to this lead is already in progress or queued.',
             'invalid_number'          => 'This number was reported invalid on a previous attempt.',
             'no_number'               => 'This lead has no usable phone number.',
+            'not_indian_mobile'       => 'This lead\'s phone number is not a valid Indian mobile number '
+                                        . '(10 digits, starting with 6-9, optionally prefixed with +91).',
             'human_handled'           => 'A person has taken this lead over, so it will not be auto-called.',
             'budget_not_configured'   => 'No calling budget has been set, so calls cannot be authorised.',
             'budget_exhausted_agent'  => 'This agent has reached its calling budget for the period.',
@@ -339,6 +341,37 @@ class Payplex_call_limits
         return false;
     }
 
+    /**
+     * Is this a valid Indian mobile number?
+     *
+     * Strict on FORMAT, unlike hasUsableNumber() above: 10 digits, starting
+     * with 6-9, after stripping spaces/hyphens/parens and an optional
+     * leading 0, +91 or 91 trunk prefix. Called only once a number is known
+     * to exist at all (see evaluate()), so this is purely a format check.
+     */
+    public static function isIndianMobile($value)
+    {
+        $digits = preg_replace('/\D+/', '', (string) $value);
+        $digits = preg_replace('/^(?:0|91)(?=\d{10}$)/', '', $digits);
+        return (bool) preg_match('/^[6-9]\d{9}$/', $digits);
+    }
+
+    /**
+     * Does the lead's usable number (see hasUsableNumber()) pass the Indian
+     * mobile format check? Checked against the same fields, in the same
+     * priority order.
+     */
+    public static function hasValidIndianMobile($lead)
+    {
+        $l = (array) $lead;
+        foreach (array('phonenumber', 'phone', 'mobile') as $f) {
+            $v = isset($l[$f]) ? trim((string) $l[$f]) : '';
+            if ($v === '') { continue; }
+            return self::isIndianMobile($v);
+        }
+        return false;
+    }
+
     /* ---------------- cost ---------------- */
 
     /**
@@ -466,6 +499,7 @@ class Payplex_call_limits
         $g = function ($k) use ($cfg) { return isset($cfg[$k]) ? $cfg[$k] : null; };
 
         if (!self::hasUsableNumber($lead)) { return $deny('no_number'); }
+        if (!self::hasValidIndianMobile($lead)) { return $deny('not_indian_mobile'); }
         if (self::numberReportedInvalid($history, $g('invalid_dispositions'))) { return $deny('invalid_number'); }
         if (self::humanHandled($history, $g('human_dispositions')))            { return $deny('human_handled'); }
         if (self::inFlight($history, $g('in_flight_statuses')))                { return $deny('call_in_flight'); }
