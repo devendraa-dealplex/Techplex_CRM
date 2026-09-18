@@ -47,7 +47,19 @@ class Aicalling extends AdminController
             get_staff_user_id(), $data['can_view_all'], [], 20, 0
         );
         $data['budget_warnings'] = $this->budgetWarnings($data['can_view_all']);
+        $data['balance_inr'] = $this->balanceInInr($data['health']);
         $this->load->view('payplex_aicalling/dashboard', $data);
+    }
+
+    /** A converted display figure only — never the balance Sonivo itself reports. Null unless USD + a rate are both set. */
+    private function balanceInInr($health)
+    {
+        $rate = get_option('payplex_aicalling_usd_inr_rate');
+        if (!$health || $health->balance_amount === null || strtoupper((string) $health->balance_currency) !== 'USD'
+            || !is_numeric($rate) || (float) $rate <= 0) {
+            return null;
+        }
+        return round((float) $health->balance_amount * (float) $rate, 2);
     }
 
     /** Warn before the hard budget refusal at 100% — account only for view_all, own spend always. */
@@ -435,7 +447,7 @@ class Aicalling extends AdminController
 
             foreach (['timeout_connect', 'timeout_read', 'timezone', 'fallback_timezone',
                       'max_per_day', 'max_per_week', 'cooldown_minutes', 'max_duration_sec',
-                      'agent_budget', 'account_budget', 'recording_disclosure'] as $f) {
+                      'agent_budget', 'account_budget', 'recording_disclosure', 'usd_inr_rate'] as $f) {
                 $val = $this->input->post($f, false);
                 if ($val !== null) {
                     update_option('payplex_aicalling_' . $f, trim((string) $val));

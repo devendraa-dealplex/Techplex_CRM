@@ -34,7 +34,7 @@ class Consent extends AdminController
         $this->load->view('payplex_aicalling/consent', $data);
     }
 
-    /** Record a consent/DND change (AJAX). */
+    /** Record a consent/DND change for one lead (AJAX). */
     public function set()
     {
         if (!$this->cap('consent_manage')) {
@@ -43,61 +43,97 @@ class Consent extends AdminController
         if (!$this->input->is_ajax_request()) {
             ajax_access_denied();
         }
-        $subjectType = (string) $this->input->post('subject_type');
-        $subjectId   = (int) $this->input->post('subject_id');
-        $channel     = (string) ($this->input->post('channel') ?: 'call');
-        $state       = $this->input->post('state');   // granted | withdrawn
+        $res = $this->applyConsent(
+            (string) $this->input->post('subject_type'),
+            (int) $this->input->post('subject_id'),
+            (string) ($this->input->post('channel') ?: 'call'),
+            $this->input->post('state'),
+            $this->input->post('dnd')
+        );
+        echo json_encode($res === true ? ['success' => true] : ['success' => false, 'message' => $res]);
+    }
 
-        if (!$subjectId || !in_array($state, ['granted', 'withdrawn'], true)) {
-            echo json_encode(['success' => false, 'message' => 'Invalid input.']);
+    /**
+     * Same rule as set(), applied to every lead in subject_ids — this used to
+     * only ever sync one lead at a time. action picks what changes:
+     *   grant/withdraw touch consent only (dnd stays whatever it already was);
+     *   dnd_on/dnd_off touch DND only (consent state stays whatever it already was).
+     */
+    public function bulk_set()
+    {
+        if (!$this->cap('consent_manage')) {
+            ajax_access_denied();
+        }
+        if (!$this->input->is_ajax_request()) {
+            ajax_access_denied();
+        }
+        $actions = [
+            'grant'    => ['granted', null],
+            'withdraw' => ['withdrawn', null],
+            'dnd_on'   => [null, '1'],
+            'dnd_off'  => [null, '0'],
+        ];
+        $action = (string) $this->input->post('action');
+        if (!isset($actions[$action])) {
+            echo json_encode(['success' => false, 'message' => 'Unknown bulk action.']);
             return;
         }
-        /*
-         * Validate the subject and channel before anything is read or written.
-         * An unrecognised value used to be coerced or stored verbatim, which
-         * put a decision in the ledger about the wrong person, or on a channel
-         * no gate reads.
-         */
+        [$state, $dnd] = $actions[$action];
+        $subjectType = (string) $this->input->post('subject_type');
+        $channel     = (string) ($this->input->post('channel') ?: 'call');
+
+        $updated = 0;
+        $failed  = [];
+        foreach (array_unique(array_filter(array_map('intval', (array) $this->input->post('subject_ids')))) as $id) {
+            if ($this->applyConsent($subjectType, $id, $channel, $state, $dnd) === true) {
+                $updated++;
+            } else {
+                $failed[] = $id;
+            }
+        }
+        echo json_encode(['success' => $updated > 0, 'updated' => $updated, 'failed' => $failed]);
+    }
+
+    /**
+     * One lead's consent/DND write. $state === null keeps the lead's existing
+     * state (used by the bulk DND-only actions); $dndRaw === null keeps the
+     * existing DND flag (used by the bulk consent-only actions) — the same
+     * "absent means unchanged" rule set() already enforced for dnd, now
+     * available for state too.
+     */
+    private function applyConsent($subjectType, $subjectId, $channel, $state, $dndRaw)
+    {
+        if (!$subjectId) {
+            return 'Invalid input.';
+        }
         if (!in_array($subjectType, Payplex_consent_model::subjectTypes(), true)) {
-            echo json_encode(['success' => false, 'message' => 'Unknown subject type.']);
-            return;
+            return 'Unknown subject type.';
         }
         if (!in_array($channel, Payplex_consent_model::channels(), true)) {
-            echo json_encode(['success' => false, 'message' => 'Unknown channel.']);
-            return;
+            return 'Unknown channel.';
         }
 
         $before = $this->payplex_consent_model->current($subjectType, $subjectId, $channel);
 
-        /*
-         * DND: absent must mean "unchanged", never "off".
-         *
-         * This read $this->input->post('dnd') ? 1 : 0, so a request that simply
-         * did not mention dnd wrote 0 — and because the latest row is the
-         * authoritative one, that silently took a person who had asked not to
-         * be called back off the do-not-call list. The same shape as the kill
-         * switch that could not be switched off: an absent field is not a
-         * decision, and a safety flag must never be cleared by omission.
-         *
-         * The interface always sends the key (1 or ''), so an explicit "off"
-         * still works; this only changes what happens when nobody said.
-         */
-        $dndRaw = $this->input->post('dnd');
-        if ($dndRaw === null) {
-            $dnd = $before ? (int) $before->dnd : 0;
-        } else {
-            $dnd = in_array((string) $dndRaw, array('1', 'true', 'on', 'yes'), true) ? 1 : 0;
+        if ($state === null) {
+            if (!$before) {
+                return 'No existing consent state to keep for this lead.';
+            }
+            $state = $before->state;
+        } elseif (!in_array($state, ['granted', 'withdrawn'], true)) {
+            return 'Invalid input.';
         }
+
+        $dnd = $dndRaw === null
+            ? ($before ? (int) $before->dnd : 0)
+            : (in_array((string) $dndRaw, array('1', 'true', 'on', 'yes'), true) ? 1 : 0);
+
         $id = $this->payplex_consent_model->record($subjectType, $subjectId, $channel, $state, $dnd, 'admin_manual');
         $this->payplex_audit_model->log('consent.changed', $subjectType, $subjectId,
             $before ? ['state' => $before->state, 'dnd' => $before->dnd] : null,
             ['state' => $state, 'dnd' => $dnd,
              'dnd_source' => $dndRaw === null ? 'unchanged (not supplied)' : 'explicit']);
 
-        if (!$id) {
-            echo json_encode(['success' => false, 'message' => 'The consent row was refused.']);
-            return;
-        }
-        echo json_encode(['success' => true]);
+        return $id ? true : 'The consent row was refused.';
     }
 }

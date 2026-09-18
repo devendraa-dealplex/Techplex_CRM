@@ -36,7 +36,7 @@
               <div class="col-md-3 col-sm-6">
                 <div class="pp-kpi"><div class="pp-kpi-l">Balance</div>
                   <div class="pp-kpi-v"><?php echo $health && $health->balance_amount !== null ? app_format_money($health->balance_amount, $health->balance_currency) : '—'; ?></div>
-                  <div class="pp-kpi-s">provider credit</div></div>
+                  <div class="pp-kpi-s">provider credit<?php echo $balance_inr !== null ? ' &mdash; &asymp; &#8377;' . number_format($balance_inr, 2) . ' (converted)' : ''; ?></div></div>
               </div>
               <div class="col-md-3 col-sm-6">
                 <div class="pp-kpi"><div class="pp-kpi-l">Your recent calls</div>

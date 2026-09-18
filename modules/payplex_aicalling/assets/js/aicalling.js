@@ -146,6 +146,54 @@
   });
 
   /* ------------------------------------------------------------------
+   * Bulk consent/DND — the page used to only ever sync one lead per
+   * click. Selecting rows and picking a bulk action sends one request
+   * per (subject_type, channel) group to consent/bulk_set.
+   * ------------------------------------------------------------------ */
+
+  function selectedRows() {
+    return $('.pp-consent-select:checked').closest('tr');
+  }
+
+  function refreshBulkBar() {
+    var n = selectedRows().length;
+    $('#pp-bulk-count').text(n + ' selected');
+    $('.pp-bulk-action').prop('disabled', n === 0);
+  }
+
+  $(document).on('change', '#pp-select-all', function () {
+    $('.pp-consent-select').prop('checked', $(this).is(':checked'));
+    refreshBulkBar();
+  });
+  $(document).on('change', '.pp-consent-select', refreshBulkBar);
+
+  $(document).on('click', '.pp-bulk-action', function () {
+    var btn = $(this);
+    var action = btn.data('action');
+    var rows = selectedRows();
+    if (!rows.length || !window.PP_CONSENT_BULK_SET) { return; }
+
+    // group by (subject_type, channel): a bulk write must not mix ledgers.
+    var groups = {};
+    rows.each(function () {
+      var r = $(this);
+      var key = r.data('type') + '|' + r.data('channel');
+      (groups[key] = groups[key] || { type: r.data('type'), channel: r.data('channel'), ids: [] })
+        .ids.push(r.data('id'));
+    });
+
+    $('.pp-bulk-action').prop('disabled', true);
+    var calls = Object.keys(groups).map(function (k) {
+      var g = groups[k];
+      return $.post(window.PP_CONSENT_BULK_SET, $.extend({
+        action: action, subject_type: g.type, channel: g.channel, subject_ids: g.ids
+      }, csrf()), null, 'json');
+    });
+
+    $.when.apply($, calls).always(function () { window.location.reload(); });
+  });
+
+  /* ------------------------------------------------------------------
    * Retry a failed call.
    *
    * Also shipped with no handler, and with no endpoint behind it either.
