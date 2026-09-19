@@ -169,6 +169,18 @@ class Payplex_agent_goals
         return 'off_track';
     }
 
+    /**
+     * What the dashboard should show. An objective with no key results is unmeasured,
+     * not failing, and a draft or cancelled one isn't being graded at all - so neither
+     * gets an on-track/off-track verdict.
+     */
+    public static function displayHealth($status, $keyResultCount, $progress, $elapsed)
+    {
+        if ((int) $keyResultCount === 0) { return 'no_key_results'; }
+        if (in_array($status, array(self::DRAFT, self::CANCELLED), true)) { return 'not_graded'; }
+        return self::health($progress, $elapsed);
+    }
+
     /** Bootstrap label colour for a health string. */
     public static function healthClass($health)
     {

@@ -2,7 +2,7 @@
 <?php
 $csrf = function () { return array('name' => $this->security->get_csrf_token_name(), 'hash' => $this->security->get_csrf_hash()); };
 $tok = $csrf();
-$card = function ($slug, $role, $name, $dept, $desc, $badge, $suggest = '', $ref = '') use ($tok) {
+$card = function ($slug, $role, $name, $dept, $desc, $badge, $suggest = '', $ref = '', $actions = '') use ($tok) {
     ob_start(); ?>
     <div class="col-md-4" style="margin-bottom:14px">
       <div class="panel_s" style="height:100%"><div class="panel-body">
@@ -25,6 +25,7 @@ $card = function ($slug, $role, $name, $dept, $desc, $badge, $suggest = '', $ref
           <?php endif; ?>
           <button class="btn btn-primary btn-sm btn-block" type="submit">Create Agent</button>
         </form>
+        <?php if ($actions): ?><div style="margin-top:6px;display:flex;gap:6px"><?php echo $actions; ?></div><?php endif; ?>
       </div></div>
     </div>
     <?php return ob_get_clean();
@@ -68,27 +69,13 @@ $card = function ($slug, $role, $name, $dept, $desc, $badge, $suggest = '', $ref
       <?php else: ?>
       <div class="row">
         <?php foreach ($custom as $c):
-          $badge = '<span class="label label-info">' . html_escape($c->approval_tier) . '</span>';
-          echo $card($c->template_slug, $c->system_role, $c->name, (string) $c->department, (string) $c->purpose, $badge);
+          $badge = '<span class="label label-primary">' . html_escape($c->approval_tier) . '</span>';
+          $actions = '<a class="btn btn-default btn-xs" href="' . admin_url('payplex_ai_agents/templates/edit/' . (int) $c->id) . '">Edit</a>'
+                   . form_open(admin_url('payplex_ai_agents/templates/destroy/' . (int) $c->id), array('style' => 'display:inline-block;margin:0', 'onsubmit' => "return confirm('Delete this template?');"))
+                   . '<button class="btn btn-danger btn-xs" type="submit">Delete</button>' . form_close();
+          echo $card($c->template_slug, $c->system_role, $c->name, (string) $c->department, (string) $c->purpose, $badge, '', '', $actions);
         endforeach; ?>
       </div>
-      <div class="table-responsive"><table class="table table-bordered" style="font-size:12px">
-        <thead><tr><th>Custom template</th><th>Role</th><th>Company</th><th>Tier</th><th>Actions</th></tr></thead>
-        <tbody>
-        <?php foreach ($custom as $c): ?>
-          <tr>
-            <td><strong><?php echo html_escape($c->name); ?></strong></td>
-            <td><?php echo html_escape($c->system_role); ?></td>
-            <td><?php echo html_escape((string) $c->company); ?></td>
-            <td><span class="label label-default"><?php echo html_escape($c->approval_tier); ?></span></td>
-            <td>
-              <a class="btn btn-default btn-xs" href="<?php echo admin_url('payplex_ai_agents/templates/edit/' . (int) $c->id); ?>">Edit</a>
-              <a class="btn btn-danger btn-xs" href="<?php echo admin_url('payplex_ai_agents/templates/destroy/' . (int) $c->id); ?>" onclick="return confirm('Delete this template?');">Delete</a>
-            </td>
-          </tr>
-        <?php endforeach; ?>
-        </tbody>
-      </table></div>
       <?php endif; ?>
 
       <!-- Built-in operational templates -->

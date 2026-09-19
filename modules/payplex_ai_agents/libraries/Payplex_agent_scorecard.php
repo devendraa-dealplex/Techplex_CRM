@@ -11,17 +11,25 @@ defined('BASEPATH') or defined('PAYPLEX_AI_TEST') or exit('No direct script acce
  * rating, plus the component breakdown so the dashboard can show WHY.
  *
  * Design choices that matter for fairness:
- *  - An agent with no activity scores 0 and rates "no_data" — never a flattering
- *    default.
+ *  - An agent with no activity rates "no_data"; one with activity but fewer than
+ *    MIN_OUTCOMES decided packets rates "insufficient_data". Neither gets a score
+ *    or a rank - a score built from defaults would look like a verdict.
+ *  - Votes and reviews are contribution, not outcomes: only decided packets
+ *    (approved / rejected / returned) show whether an agent's work was any good.
  *  - Approval rate only counts DECIDED packets (approved + rejected); packets
  *    still in review don't punish or flatter.
  *  - Rejections and returns pull the score down, so volume alone can't win.
+ *  - Confidence is the agent's own claim. When there is none it is left out of
+ *    the score (the other weights are rescaled), not counted as zero.
  */
 class Payplex_agent_scorecard
 {
+    /** Decided packets (approved + rejected + returned) needed before an agent is scored. */
+    const MIN_OUTCOMES = 3;
+
     /**
      * @param array $s counts: submitted, approved, rejected, returned,
-     *                  reviews, knowledge_approved, avg_confidence (0..1)
+     *                  reviews, knowledge_approved, avg_confidence (0..1 or null when none)
      * @return array score(0..100), rating, components{}, and the echoed stats
      */
     public static function score(array $s)
@@ -32,30 +40,41 @@ class Payplex_agent_scorecard
         $returned  = self::i($s, 'returned');
         $reviews   = self::i($s, 'reviews');
         $knowledge = self::i($s, 'knowledge_approved');
-        $conf      = isset($s['avg_confidence']) ? (float) $s['avg_confidence'] : 0.0;
-        if ($conf < 0) { $conf = 0.0; } if ($conf > 1) { $conf = 1.0; }
-
-        $activity = $submitted + $reviews + $knowledge;
-        if ($activity === 0) {
-            return array('score' => 0, 'rating' => 'no_data', 'components' => array(
-                'quality' => 0.0, 'approval' => 0.0, 'contribution' => 0.0, 'confidence' => 0.0,
-            ), 'stats' => $s);
+        $conf      = null;
+        if (isset($s['avg_confidence']) && is_numeric($s['avg_confidence'])) {
+            $conf = max(0.0, min(1.0, (float) $s['avg_confidence']));
         }
 
-        // Approval quality: of DECIDED packets, share approved (0..1). No decided => neutral 0.5.
+        $none = array('quality' => 0.0, 'approval' => 0.0, 'contribution' => 0.0, 'confidence' => null);
+
+        if ($submitted + $reviews + $knowledge === 0) {
+            return array('score' => 0, 'rating' => 'no_data', 'components' => $none, 'stats' => $s);
+        }
+
+        $outcomes = $approved + $rejected + $returned;
+        if ($outcomes < self::MIN_OUTCOMES) {
+            return array('score' => 0, 'rating' => 'insufficient_data', 'components' => $none, 'stats' => $s);
+        }
+
+        // Approval quality: of DECIDED packets, share approved (0..1).
         $decided  = $approved + $rejected;
-        $approval = $decided > 0 ? $approved / $decided : 0.5;
+        $approval = $decided > 0 ? $approved / $decided : 0.0;
 
         // Quality: penalise returns (rework) relative to everything submitted.
-        $quality = $submitted > 0 ? max(0.0, 1.0 - ($returned / $submitted)) : 0.5;
+        $quality = max(0.0, 1.0 - ($returned / max(1, $submitted)));
 
         // Contribution: volume of useful output, saturating (diminishing returns).
-        // 10 decided/reviews/knowledge items ~= full marks.
+        // 10 approved/reviews/knowledge items ~= full marks.
         $useful       = $approved + $reviews + $knowledge;
         $contribution = self::saturate($useful, 10.0);
 
-        // Weights sum to 1.0
-        $score = 100.0 * (0.35 * $approval + 0.20 * $quality + 0.30 * $contribution + 0.15 * $conf);
+        // Weights: approval .35, quality .20, contribution .30, confidence .15.
+        // Without confidence data the remaining .85 is rescaled to 1.0.
+        if ($conf === null) {
+            $score = 100.0 * (0.35 * $approval + 0.20 * $quality + 0.30 * $contribution) / 0.85;
+        } else {
+            $score = 100.0 * (0.35 * $approval + 0.20 * $quality + 0.30 * $contribution + 0.15 * $conf);
+        }
         $score = (int) round(max(0.0, min(100.0, $score)));
 
         return array(
@@ -65,7 +84,7 @@ class Payplex_agent_scorecard
                 'quality'      => round($quality, 3),
                 'approval'     => round($approval, 3),
                 'contribution' => round($contribution, 3),
-                'confidence'   => round($conf, 3),
+                'confidence'   => $conf === null ? null : round($conf, 3),
             ),
             'stats' => $s,
         );
@@ -88,13 +107,20 @@ class Payplex_agent_scorecard
         return 'needs_improvement';
     }
 
+    /** Ratings that carry no score or rank. */
+    public static function isUnscored($rating)
+    {
+        return in_array($rating, array('no_data', 'insufficient_data'), true);
+    }
+
     public static function ratingClass($rating)
     {
         switch ($rating) {
             case 'excellent': return 'success';
             case 'good':      return 'info';
             case 'fair':      return 'warning';
-            case 'no_data':   return 'default';
+            case 'no_data':
+            case 'insufficient_data': return 'default';
             default:          return 'danger';
         }
     }

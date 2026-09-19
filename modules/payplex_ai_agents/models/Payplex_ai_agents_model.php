@@ -10,6 +10,7 @@ require_once __DIR__ . '/../libraries/Payplex_agent_templates.php';
 require_once __DIR__ . '/../libraries/Payplex_agent_audit.php';
 require_once __DIR__ . '/../libraries/Payplex_agent_sandbox.php';
 require_once __DIR__ . '/../libraries/Payplex_agent_knowledge.php';
+require_once __DIR__ . '/../libraries/Payplex_agent_llm.php';
 require_once __DIR__ . '/../libraries/Payplex_agent_calling.php';
 require_once __DIR__ . '/../libraries/Payplex_agent_pipeline.php';
 require_once __DIR__ . '/../libraries/Payplex_agent_exec_templates.php';
@@ -552,12 +553,25 @@ class Payplex_ai_agents_model extends App_Model
 
         $agentArr = (array) $agent;
         $run = Payplex_agent_sandbox::run($agentArr, $input, $ctx);
+        $simEscalations = (int) $run['escalations'];
+
+        // Record exactly what was submitted, right after the engine's "Received test input" line.
+        $parts = array();
+        foreach ($input as $field => $value) {
+            $value = trim((string) $value);
+            $parts[] = $field . ': ' . ($value === '' ? '(empty)' : mb_substr($value, 0, 2000));
+        }
+        array_splice($run['transcript'], 2, 0, array(array(
+            'type' => 'input', 'state' => 'ok', 'message' => 'Test input submitted - ' . implode(' | ', $parts),
+        )));
+
+        $run = $this->applyLlmStep($agentArr, $run, $input);
 
         $this->db->insert(db_prefix() . 'payplex_ai_agent_runs', array(
             'agent_id'          => (int) $id,
             'mode'              => 'sandbox',
             'status'            => $run['status'],
-            'model'             => $run['model'],
+            'model'             => substr((string) $run['model'], 0, 100),
             'tokens'            => (int) $run['tokens'],
             'cost'              => $run['estimated_cost'],
             'confidence'        => $run['confidence'],
@@ -576,13 +590,82 @@ class Payplex_ai_agents_model extends App_Model
         $this->audit((int) $id, 'cost', 'Estimated cost $' . number_format($run['estimated_cost'], 6), array('tokens' => $run['tokens']), $actorId);
 
         // Route escalations from the run into the human-review queue.
-        if ((int) $run['escalations'] > 0) {
+        if ($simEscalations > 0) {
             $this->escalate((int) $id, $runId, 'low_confidence',
-                $run['escalations'] . ' action(s) in run #' . $runId . ' fell below the confidence threshold and would require human review in production.', $actorId);
+                $simEscalations . ' action(s) in run #' . $runId . ' fell below the confidence threshold and would require human review in production.', $actorId);
+        }
+        if (!empty($run['llm_escalation'])) {
+            $this->escalate((int) $id, $runId, $run['llm_escalation']['reason'], $run['llm_escalation']['detail'], $actorId);
         }
 
         $run['ok'] = true;
         $run['run_id'] = $runId;
+        return $run;
+    }
+
+    /**
+     * Optional real-LLM step for a sandbox run (OpenRouter). Grounded and fail-closed:
+     * the model only sees the best PERMITTED knowledge entry, and is not called at all
+     * when there is no confident match. Only the free-text message is sent to the
+     * provider - never the lead's name/email/phone. On success the run's tokens/cost
+     * are replaced with the provider's real usage. Adds a transcript line either way.
+     */
+    private function applyLlmStep(array $agent, array $run, array $input)
+    {
+        if ($run['status'] !== 'completed') {
+            return $run;
+        }
+        $line = function ($state, $message) {
+            return array('type' => 'llm_call', 'message' => $message, 'state' => $state);
+        };
+
+        $key = Payplex_agent_llm::resolveKey($this->getSetting('openrouter_api_key', ''));
+        if ($key === '') {
+            $run['transcript'][] = $line('skipped', 'LLM step skipped: no OpenRouter API key configured. Tokens/cost above are estimates.');
+            return $run;
+        }
+        $question = trim(isset($input['message']) ? (string) $input['message'] : '');
+        if ($question === '') {
+            $run['transcript'][] = $line('skipped', 'LLM step skipped: no message in the test input to answer.');
+            return $run;
+        }
+        $question = mb_substr($question, 0, 500);
+
+        $res = Payplex_agent_knowledge::answer($question, $this->kbEntriesArray(), (int) $agent['id'], 0.34);
+        if (empty($res['hit'])) {
+            $reason = isset($res['reason']) ? $res['reason'] : 'no_confident_match';
+            $run['escalations'] = (int) $run['escalations'] + 1;
+            $run['llm_escalation'] = array(
+                'reason' => 'kb_' . $reason,
+                'detail' => 'LLM not called - no confident permitted knowledge for: "' . substr($question, 0, 180) . '"',
+            );
+            $run['transcript'][] = $line('escalate', 'LLM NOT called (' . $reason . ', score ' . $res['score'] . '): answers only from permitted knowledge - escalated to human review.');
+            return $run;
+        }
+
+        $entry  = $res['entry'];
+        $system = trim((string) (isset($agent['system_prompt']) ? $agent['system_prompt'] : ''));
+        if ($system === '') {
+            $system = 'You are a helpful support assistant.';
+        }
+        $system .= "\n\nRules: answer ONLY using the KNOWLEDGE provided below. If it does not contain the answer, say you do not know. Be concise.";
+        $llm = Payplex_agent_llm::chat($key, array(
+            array('role' => 'system', 'content' => $system),
+            array('role' => 'user', 'content' => "KNOWLEDGE (" . $entry['title'] . "):\n" . $entry['content'] . "\n\nQUESTION: " . $question),
+        ), array('model' => $this->getSetting('openrouter_model', Payplex_agent_llm::DEFAULT_MODEL)));
+
+        if (empty($llm['ok'])) {
+            $run['escalations'] = (int) $run['escalations'] + 1;
+            $run['llm_escalation'] = array('reason' => 'llm_error', 'detail' => 'LLM call failed: ' . $llm['error']);
+            $run['transcript'][] = $line('error', 'LLM call FAILED (' . $llm['error'] . ') - escalated to human review.');
+            return $run;
+        }
+
+        $run['tokens']         = $llm['tokens'];
+        $run['estimated_cost'] = $llm['cost'];
+        $run['model']          = $llm['model'];
+        $run['llm_answer']     = $llm['content'];
+        $run['transcript'][]   = $line('ok', 'LLM (' . $llm['model'] . ') answered from KB "' . $entry['title'] . '" [' . $llm['prompt_tokens'] . ' prompt + ' . $llm['completion_tokens'] . ' completion tokens, real usage]: ' . mb_substr($llm['content'], 0, 800));
         return $run;
     }
 
@@ -1119,12 +1202,35 @@ class Payplex_ai_agents_model extends App_Model
     }
 
     /** Staff workloads (assigned open lead counts) for assignment suggestion. */
+    /**
+     * Comma-separated role-name keywords a staff member's role must contain to be
+     * suggested for lead assignment (default "sales"). Blank = every active staff.
+     */
+    public function pipelineAssignRoles()
+    {
+        return trim((string) $this->getSetting('pipeline_assign_roles', 'sales'));
+    }
+
     private function staffWorkloads()
     {
         $p = db_prefix();
+        $where = '';
+        $binds = array();
+        $keywords = array_filter(array_map(function ($k) {
+            return trim(str_replace(array('%', '_'), '', $k)); // no LIKE wildcards from settings
+        }, explode(',', strtolower($this->pipelineAssignRoles()))));
+        if (!empty($keywords)) {
+            $likes = array();
+            foreach ($keywords as $k) {
+                $likes[] = 'LOWER(r.name) LIKE ?';
+                $binds[] = '%' . $k . '%';
+            }
+            $where = ' AND (' . implode(' OR ', $likes) . ')';
+        }
         $rows = $this->db->query('SELECT s.staffid AS id,
                 (SELECT COUNT(*) FROM ' . $p . 'leads l WHERE l.assigned = s.staffid) AS `load`
-            FROM ' . $p . 'staff s WHERE s.active = 1')->result_array();
+            FROM ' . $p . 'staff s LEFT JOIN ' . $p . 'roles r ON r.roleid = s.role
+            WHERE s.active = 1' . $where, $binds)->result_array();
         foreach ($rows as &$r) {
             $r['available'] = true;
             $r['territory'] = '';
@@ -1181,6 +1287,37 @@ class Payplex_ai_agents_model extends App_Model
     {
         $this->db->order_by('id', 'DESC')->limit((int) $limit);
         return $this->db->get(db_prefix() . 'payplex_ai_agent_pipeline_events')->result();
+    }
+
+    /**
+     * Display names for the leads and staff referenced by pipeline events (and by
+     * the staff ids inside their stored results), so the page can show names, not ids.
+     * Returns ['leads' => id => name, 'staff' => id => name].
+     */
+    public function pipelineLookups(array $events)
+    {
+        $leadIds = array();
+        $staffIds = array();
+        foreach ($events as $e) {
+            $leadIds[(int) $e->lead_id] = true;
+            if (!empty($e->assign_staff)) {
+                $staffIds[(int) $e->assign_staff] = true;
+            }
+        }
+        $out = array('leads' => array(), 'staff' => array());
+        if (!empty($leadIds)) {
+            $rows = $this->db->select('id, name')->where_in('id', array_keys($leadIds))->get(db_prefix() . 'leads')->result();
+            foreach ($rows as $r) {
+                $out['leads'][(int) $r->id] = (string) $r->name;
+            }
+        }
+        if (!empty($staffIds)) {
+            $rows = $this->db->select('staffid, firstname, lastname')->where_in('staffid', array_keys($staffIds))->get(db_prefix() . 'staff')->result();
+            foreach ($rows as $r) {
+                $out['staff'][(int) $r->staffid] = trim($r->firstname . ' ' . $r->lastname);
+            }
+        }
+        return $out;
     }
 
     /* ==================== M5: Chairman Command Centre ==================== */
@@ -1856,6 +1993,15 @@ class Payplex_ai_agents_model extends App_Model
         return $rows;
     }
 
+    /** May this actor see/change this objective? Same company rules as the list page. */
+    public function objCanAccess($obj, $staffId, $isAdmin)
+    {
+        if (!$obj) { return false; }
+        $allowed = $this->allowedCompaniesForActor($staffId, $isAdmin);
+        $cross   = $this->hasCrossCompany($staffId, $isAdmin);
+        return Payplex_agent_rbac::canAccess(isset($obj->company) ? $obj->company : '', $allowed, $isAdmin, $cross);
+    }
+
     public function objKeyResults($objId)
     {
         if (!$this->db->table_exists($this->krTable())) { return array(); }
@@ -1913,11 +2059,13 @@ class Payplex_ai_agents_model extends App_Model
     }
 
     /** Update the current measured value of a key result (progress tracking). */
-    public function krUpdateCurrent($krId, $current, $actorId)
+    public function krUpdateCurrent($krId, $current, $actorId, $objId = null)
     {
         if (!$this->db->table_exists($this->krTable())) { return array('ok' => false, 'error' => 'no_table'); }
         $kr = $this->db->where('id', (int) $krId)->get($this->krTable())->row();
         if (!$kr) { return array('ok' => false, 'error' => 'not_found'); }
+        // The key result must belong to the objective the caller was authorised for.
+        if ($objId !== null && (int) $kr->objective_id !== (int) $objId) { return array('ok' => false, 'error' => 'not_found'); }
         if (!is_numeric($current)) { return array('ok' => false, 'error' => 'current_not_numeric'); }
         $this->db->where('id', (int) $krId)->update($this->krTable(), array('current' => (float) $current, 'dateupdated' => date('Y-m-d H:i:s')));
         $this->audit(null, 'config_change', 'Key result #' . (int) $krId . ' current -> ' . (float) $current, array('kr_id' => (int) $krId), $actorId);
@@ -1933,7 +2081,10 @@ class Payplex_ai_agents_model extends App_Model
      */
     public function agentPerformance($staffId, $isAdmin, $companyView = '')
     {
-        $agents = $this->get();
+        // Real agents only: templates are blueprints, and archived agents are retired.
+        $agents = array_values(array_filter($this->agents(), function ($a) {
+            return $a->status !== 'archived';
+        }));
         if (empty($agents)) { return array(); }
 
         $allowed = $this->allowedCompaniesForActor($staffId, $isAdmin);
@@ -1964,29 +2115,55 @@ class Payplex_ai_agents_model extends App_Model
             }
         }
 
-        // Aggregate council reviews by reviewer agent
+        // Reviews and votes are counted only for records the actor may see, using the
+        // company of the decision (review) or motion (vote) they belong to - the same
+        // rule the decision counts above already use.
         $rev = array();
         if ($this->db->table_exists(db_prefix() . 'payplex_ai_agent_council_reviews')) {
-            $rows = $this->db->select('reviewer_agent_id')
+            $decCo = array();
+            if ($this->db->table_exists(db_prefix() . 'payplex_ai_agent_decisions')) {
+                foreach ($this->db->select('id, company')->get(db_prefix() . 'payplex_ai_agent_decisions')->result() as $d) {
+                    $decCo[(int) $d->id] = (string) $d->company;
+                }
+            }
+            $rows = $this->db->select('reviewer_agent_id, decision_id')
                 ->where('reviewer_agent_id >', 0)
                 ->get(db_prefix() . 'payplex_ai_agent_council_reviews')->result();
-            foreach ($rows as $r) { $aid = (int) $r->reviewer_agent_id; $rev[$aid] = (isset($rev[$aid]) ? $rev[$aid] : 0) + 1; }
+            foreach ($rows as $r) {
+                $co = isset($decCo[(int) $r->decision_id]) ? $decCo[(int) $r->decision_id] : '';
+                if (!$companyOk($co)) { continue; }
+                $aid = (int) $r->reviewer_agent_id; $rev[$aid] = (isset($rev[$aid]) ? $rev[$aid] : 0) + 1;
+            }
         }
 
         // M11: council-vote participation counts toward the same contribution signal
         if ($this->db->table_exists(db_prefix() . 'payplex_ai_agent_motion_votes')) {
-            $rows = $this->db->select('voter_agent_id')
+            $motCo = array();
+            if ($this->db->table_exists(db_prefix() . 'payplex_ai_agent_motions')) {
+                foreach ($this->db->select('id, company')->get(db_prefix() . 'payplex_ai_agent_motions')->result() as $mo) {
+                    $motCo[(int) $mo->id] = (string) $mo->company;
+                }
+            }
+            $rows = $this->db->select('voter_agent_id, motion_id')
                 ->where('voter_agent_id >', 0)
                 ->get(db_prefix() . 'payplex_ai_agent_motion_votes')->result();
-            foreach ($rows as $r) { $aid = (int) $r->voter_agent_id; $rev[$aid] = (isset($rev[$aid]) ? $rev[$aid] : 0) + 1; }
+            foreach ($rows as $r) {
+                $co = isset($motCo[(int) $r->motion_id]) ? $motCo[(int) $r->motion_id] : '';
+                if (!$companyOk($co)) { continue; }
+                $aid = (int) $r->voter_agent_id; $rev[$aid] = (isset($rev[$aid]) ? $rev[$aid] : 0) + 1;
+            }
         }
 
         $out = array();
         foreach ($agents as $a) {
             $aid = (int) $a->id;
-            // scope the agent itself by its own company when it has one
             $agentCo = isset($a->company) ? $a->company : '';
-            if (!$companyOk($agentCo) && empty($dec[$aid]) && empty($rev[$aid])) { continue; }
+            // An agent belonging to a company is visible only to actors with access to that
+            // company - having votes or decisions elsewhere must not expose it.
+            if (!Payplex_agent_rbac::canAccess((string) $agentCo, $allowed, $isAdmin, $cross)) { continue; }
+            // Under a company filter, keep an agent only if it belongs to that company or has
+            // (already company-filtered) activity in it.
+            if ($view !== '' && Payplex_agent_rbac::normalizeCode((string) $agentCo) !== $view && empty($dec[$aid]) && empty($rev[$aid])) { continue; }
             $d = isset($dec[$aid]) ? $dec[$aid] : array('submitted'=>0,'approved'=>0,'rejected'=>0,'returned'=>0,'conf_sum'=>0.0,'conf_n'=>0);
             $stats = array(
                 'submitted'          => $d['submitted'],
@@ -1995,7 +2172,7 @@ class Payplex_ai_agents_model extends App_Model
                 'returned'           => $d['returned'],
                 'reviews'            => isset($rev[$aid]) ? $rev[$aid] : 0,
                 'knowledge_approved' => 0,
-                'avg_confidence'     => $d['conf_n'] > 0 ? round($d['conf_sum'] / $d['conf_n'], 3) : 0.0,
+                'avg_confidence'     => $d['conf_n'] > 0 ? round($d['conf_sum'] / $d['conf_n'], 3) : null,
             );
             $card = Payplex_agent_scorecard::score($stats);
             $out[] = array(
