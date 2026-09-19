@@ -43,20 +43,45 @@ class Campaigns extends AdminController
             ajax_access_denied();
         }
         if ($this->input->post()) {
+            $statusId = (int) $this->input->post('status_id');
+            $sourceId = (int) $this->input->post('source_id');
+            $total    = $this->audienceCount($statusId, $sourceId);
             $id = $this->payplex_campaigns_model->create([
                 'name'          => $this->input->post('name'),
                 'agent_id'      => $this->input->post('agent_id'),
                 'language'      => $this->input->post('language') ?: 'en-IN',
                 'objective'     => $this->input->post('objective'),
-                'audience_json' => json_encode(['filter' => $this->input->post('audience')]),
-                'total_targets' => (int) $this->input->post('total_targets'),
+                'audience_json' => json_encode(['status_id' => $statusId ?: null, 'source_id' => $sourceId ?: null]),
+                'total_targets' => $total,
             ]);
             $this->payplex_audit_model->log('campaign.created', 'campaign', $id, null,
-                ['name' => $this->input->post('name')]);
-            set_alert('success', 'Campaign submitted for approval.');
+                ['name' => $this->input->post('name'), 'targets' => $total]);
+            set_alert('success', "Campaign submitted for approval ({$total} lead(s) targeted).");
             redirect(admin_url('payplex_aicalling/campaigns'));
         }
-        $this->load->view('payplex_aicalling/campaign_form', ['title' => 'New Campaign']);
+        $this->load->model('leads_model');
+        $this->load->view('payplex_aicalling/campaign_form', [
+            'title'    => 'New Campaign',
+            'statuses' => $this->leads_model->get_status(),
+            'sources'  => $this->leads_model->get_source(),
+        ]);
+    }
+
+    /** Live audience count for the picker preview and the actual total_targets at submit. */
+    public function audience_count()
+    {
+        if (!$this->cap('campaign_create')) {
+            ajax_access_denied();
+        }
+        echo json_encode(['count' => $this->audienceCount(
+            (int) $this->input->get('status_id'), (int) $this->input->get('source_id'))]);
+    }
+
+    private function audienceCount($statusId, $sourceId)
+    {
+        if ($statusId > 0) { $this->db->where('status', $statusId); }
+        if ($sourceId > 0) { $this->db->where('source', $sourceId); }
+        return (int) $this->db->count_all_results(db_prefix() . 'leads');
     }
 
     /** Approve (maker-checker enforced in the model). */

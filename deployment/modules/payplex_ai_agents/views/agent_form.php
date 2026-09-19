@@ -1,24 +1,27 @@
 <?php defined('BASEPATH') or exit('No direct script access allowed'); ?>
 <?php
-// Value helpers tolerant of create (null) vs edit (object).
+// Value helpers tolerant of create (null) vs edit (object) vs "re-showing the
+// form after a validation error" (a plain object built from the posted data).
 $A = isset($agent) ? $agent : null;
 function pv($A, $f, $def = '') { return $A && isset($A->$f) ? $A->$f : $def; }
 function pvlist($A, $f) {
     if (!$A || !isset($A->$f)) return '';
     return is_array($A->$f) ? implode("\n", $A->$f) : (string) $A->$f;
 }
-$isEdit = isset($is_edit) ? (bool) $is_edit : ($A !== null);
-$formUrl = isset($form_url) ? $form_url
-    : ($isEdit ? admin_url('payplex_ai_agents/agents/edit/' . (int) $A->id) : admin_url('payplex_ai_agents/agents/create'));
+// $is_edit is passed explicitly when re-showing the form after a validation
+// error (see Agents::create()/edit()) so a failed CREATE doesn't get treated
+// as an edit just because $A is non-null; falls back to inferring from $A for
+// the normal GET case.
+$isEdit = isset($is_edit) ? $is_edit : ($A !== null);
+$formUrl = ($isEdit && $A && isset($A->id))
+    ? admin_url('payplex_ai_agents/agents/edit/' . (int) $A->id)
+    : admin_url('payplex_ai_agents/agents/create');
+$staff = isset($staff) ? $staff : array();
 ?>
 <?php init_head(); ?>
 <div id="wrapper">
   <div class="content">
-    <?php echo form_open($formUrl, ['id' => 'agent-form']); ?>
-    <input type="hidden" name="confirm_duplicate" id="confirm_duplicate_field" value="">
-    <?php if (!empty($confirm_duplicate_name)): ?>
-      <div class="alert alert-warning">An agent named "<?php echo html_escape($confirm_duplicate_name); ?>" already exists.</div>
-    <?php endif; ?>
+    <?php echo form_open($formUrl); ?>
     <div class="row">
       <div class="col-md-8">
         <div class="panel_s"><div class="panel-body">
@@ -33,8 +36,22 @@ $formUrl = isset($form_url) ? $form_url
           <div class="form-group"><label>Purpose</label><textarea class="form-control" name="purpose" rows="2"><?php echo html_escape(pv($A,'purpose')); ?></textarea></div>
 
           <div class="row">
-            <div class="col-md-6"><div class="form-group"><label>AI provider</label><input class="form-control" name="ai_provider" value="<?php echo html_escape(pv($A,'ai_provider','openai')); ?>"></div></div>
-            <div class="col-md-6"><div class="form-group"><label>AI model</label><input class="form-control" name="ai_model" value="<?php echo html_escape(pv($A,'ai_model','gpt-4o-mini')); ?>"></div></div>
+            <div class="col-md-6"><div class="form-group"><label>AI provider</label>
+              <input class="form-control" name="ai_provider" list="ai_provider_options" value="<?php echo html_escape(pv($A,'ai_provider','openai')); ?>">
+              <datalist id="ai_provider_options">
+                <option value="openai"><option value="anthropic">
+              </datalist>
+            </div></div>
+            <div class="col-md-6"><div class="form-group"><label>AI model</label>
+              <input class="form-control" name="ai_model" list="ai_model_options" value="<?php echo html_escape(pv($A,'ai_model','gpt-4o-mini')); ?>">
+              <datalist id="ai_model_options">
+                <?php foreach (array_keys(Payplex_agent_sandbox::modelPrices()) as $m) {
+                    if ($m === 'default') { continue; }
+                    echo '<option value="' . html_escape($m) . '">';
+                } ?>
+              </datalist>
+              <p class="text-muted" style="font-size:11px;margin-bottom:0">Cost estimates only recognise the suggested models above; anything else falls back to a generic rate.</p>
+            </div></div>
           </div>
           <div class="form-group"><label>System prompt</label><textarea class="form-control" name="system_prompt" rows="4"><?php echo html_escape(pv($A,'system_prompt')); ?></textarea></div>
 
@@ -77,10 +94,35 @@ $formUrl = isset($form_url) ? $form_url
           <h5 style="margin-top:0">Schedule &amp; roles</h5>
           <div class="form-group"><label>Working days</label><input class="form-control" name="working_days" placeholder="Mon-Fri" value="<?php echo html_escape(pv($A,'working_days')); ?>"></div>
           <div class="form-group"><label>Working hours</label><input class="form-control" name="working_hours" placeholder="09:00-18:00" value="<?php echo html_escape(pv($A,'working_hours')); ?>"></div>
-          <div class="form-group"><label>Owner staff id</label><input class="form-control" name="owner_id" type="number" value="<?php echo html_escape(pv($A,'owner_id')); ?>"></div>
-          <div class="form-group"><label>Reviewer staff id</label><input class="form-control" name="reviewer_id" type="number" value="<?php echo html_escape(pv($A,'reviewer_id')); ?>"></div>
-          <div class="form-group"><label>Approver staff id</label><input class="form-control" name="approver_id" type="number" value="<?php echo html_escape(pv($A,'approver_id')); ?>"></div>
-          <p class="text-muted" style="font-size:11px">New agents always start in <strong>Sandbox / draft</strong>. The approver must differ from the creator and submitter.</p>
+          <?php
+            // staff_model->get('', ...) (no numeric id) returns plain arrays
+            // (result_array()), not objects - staff_model->get($id) with a
+            // numeric id is the one that returns an object. Array access here.
+            $staffOptions = array();
+            foreach ($staff as $s) {
+                $staffOptions[(int) $s['staffid']] = $s['firstname'] . ' ' . $s['lastname'];
+            }
+            asort($staffOptions);
+            function staff_select($name, $label, $staffOptions, $selected) { ?>
+              <div class="form-group"><label><?php echo html_escape($label); ?></label>
+                <select class="form-control" name="<?php echo $name; ?>">
+                  <option value="0">- None -</option>
+                  <?php foreach ($staffOptions as $sid => $sname) { ?>
+                    <option value="<?php echo (int) $sid; ?>" <?php echo (int) $selected === $sid ? 'selected' : ''; ?>><?php echo html_escape($sname); ?></option>
+                  <?php } ?>
+                </select>
+              </div>
+            <?php }
+            staff_select('owner_id', 'Owner', $staffOptions, (int) pv($A,'owner_id'));
+            staff_select('reviewer_id', 'Reviewer', $staffOptions, (int) pv($A,'reviewer_id'));
+            staff_select('approver_id', 'Approver', $staffOptions, (int) pv($A,'approver_id'));
+          ?>
+          <p class="text-muted" style="font-size:11px">
+            New agents always start in <strong>Sandbox / draft</strong>. The approver must always differ from the creator and submitter.
+            <strong>Owner</strong> defaults to you if left as "- None -"; it is informational only.
+            <strong>Reviewer</strong> is informational only (not yet enforced anywhere).
+            If <strong>Approver</strong> is set, only that staff member may approve this agent - leave it as "- None -" to allow any eligible staff member to approve.
+          </p>
         </div></div>
         <button class="btn btn-primary btn-block" type="submit"><?php echo $isEdit ? 'Save changes' : 'Create agent'; ?></button>
         <a href="<?php echo admin_url('payplex_ai_agents/agents'); ?>" class="btn btn-default btn-block">Cancel</a>
@@ -89,39 +131,6 @@ $formUrl = isset($form_url) ? $form_url
     <?php echo form_close(); ?>
   </div>
 </div>
-<?php if (!empty($confirm_duplicate_name)): ?>
-<div class="modal fade" id="duplicate-agent-modal" tabindex="-1" role="dialog">
-  <div class="modal-dialog" role="document">
-    <div class="modal-content">
-      <div class="modal-header">
-        <button type="button" class="close" data-dismiss="modal" aria-label="Close"><span aria-hidden="true">&times;</span></button>
-        <h4 class="modal-title">Duplicate agent name</h4>
-      </div>
-      <div class="modal-body">
-        <p>An agent named "<?php echo html_escape($confirm_duplicate_name); ?>" already exists. Do you want to create a duplicate agent anyway?</p>
-      </div>
-      <div class="modal-footer">
-        <button type="button" class="btn btn-default" id="duplicate-agent-no">No</button>
-        <button type="button" class="btn btn-warning" id="duplicate-agent-yes">Yes</button>
-      </div>
-    </div>
-  </div>
-</div>
-<?php endif; ?>
 <?php init_tail(); ?>
-<?php if (!empty($confirm_duplicate_name)): ?>
-<script>
-$(function(){
-  $('#duplicate-agent-modal').modal({backdrop: 'static', keyboard: false});
-  $('#duplicate-agent-yes').on('click', function(){
-    $('#confirm_duplicate_field').val('1');
-    $('#agent-form').get(0).submit();
-  });
-  $('#duplicate-agent-no').on('click', function(){
-    $('#duplicate-agent-modal').modal('hide');
-  });
-});
-</script>
-<?php endif; ?>
 </body>
 </html>

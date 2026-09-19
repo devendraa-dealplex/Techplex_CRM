@@ -126,22 +126,71 @@
       });
   }
 
+  // .closest('[data-type]') matches both a Consent-table <tr> and the lead panel's quick-toggle div.
   $(document).on('click', '.pp-consent-grant', function () {
-    var row = $(this).closest('tr');
+    var row = $(this).closest('[data-type]');
     // preserve the DND flag: granting consent is not a reason to clear it
     consentWrite(row, 'granted', parseInt(row.data('dnd'), 10) === 1, $(this));
   });
 
   $(document).on('click', '.pp-consent-withdraw', function () {
-    var row = $(this).closest('tr');
+    var row = $(this).closest('[data-type]');
     consentWrite(row, 'withdrawn', parseInt(row.data('dnd'), 10) === 1, $(this));
   });
 
   $(document).on('click', '.pp-consent-dnd', function () {
-    var row = $(this).closest('tr');
+    var row = $(this).closest('[data-type]');
     var on  = parseInt(row.data('dnd'), 10) === 1;
     // preserve the consent state: toggling DND is not a consent decision
     consentWrite(row, String(row.data('state') || 'granted'), !on, $(this));
+  });
+
+  /* ------------------------------------------------------------------
+   * Bulk consent/DND — the page used to only ever sync one lead per
+   * click. Selecting rows and picking a bulk action sends one request
+   * per (subject_type, channel) group to consent/bulk_set.
+   * ------------------------------------------------------------------ */
+
+  function selectedRows() {
+    return $('.pp-consent-select:checked').closest('tr');
+  }
+
+  function refreshBulkBar() {
+    var n = selectedRows().length;
+    $('#pp-bulk-count').text(n + ' selected');
+    $('.pp-bulk-action').prop('disabled', n === 0);
+  }
+
+  $(document).on('change', '#pp-select-all', function () {
+    $('.pp-consent-select').prop('checked', $(this).is(':checked'));
+    refreshBulkBar();
+  });
+  $(document).on('change', '.pp-consent-select', refreshBulkBar);
+
+  $(document).on('click', '.pp-bulk-action', function () {
+    var btn = $(this);
+    var action = btn.data('action');
+    var rows = selectedRows();
+    if (!rows.length || !window.PP_CONSENT_BULK_SET) { return; }
+
+    // group by (subject_type, channel): a bulk write must not mix ledgers.
+    var groups = {};
+    rows.each(function () {
+      var r = $(this);
+      var key = r.data('type') + '|' + r.data('channel');
+      (groups[key] = groups[key] || { type: r.data('type'), channel: r.data('channel'), ids: [] })
+        .ids.push(r.data('id'));
+    });
+
+    $('.pp-bulk-action').prop('disabled', true);
+    var calls = Object.keys(groups).map(function (k) {
+      var g = groups[k];
+      return $.post(window.PP_CONSENT_BULK_SET, $.extend({
+        action: action, subject_type: g.type, channel: g.channel, subject_ids: g.ids
+      }, csrf()), null, 'json');
+    });
+
+    $.when.apply($, calls).always(function () { window.location.reload(); });
   });
 
   /* ------------------------------------------------------------------

@@ -46,7 +46,42 @@ class Aicalling extends AdminController
         $data['recent'] = $this->aicalling_model->listForStaff(
             get_staff_user_id(), $data['can_view_all'], [], 20, 0
         );
+        $data['budget_warnings'] = $this->budgetWarnings($data['can_view_all']);
+        $data['balance_inr'] = $this->balanceInInr($data['health']);
         $this->load->view('payplex_aicalling/dashboard', $data);
+    }
+
+    /** A converted display figure only — never the balance Sonivo itself reports. Null unless USD + a rate are both set. */
+    private function balanceInInr($health)
+    {
+        $rate = get_option('payplex_aicalling_usd_inr_rate');
+        if (!$health || $health->balance_amount === null || strtoupper((string) $health->balance_currency) !== 'USD'
+            || !is_numeric($rate) || (float) $rate <= 0) {
+            return null;
+        }
+        return round((float) $health->balance_amount * (float) $rate, 2);
+    }
+
+    /** Warn before the hard budget refusal at 100% — account only for view_all, own spend always. */
+    private function budgetWarnings($canViewAll)
+    {
+        $since = date('Y-m-01 00:00:00');
+        $checks = ['Your agent' => [$this->aicalling_model->spendSince($since, get_staff_user_id()),
+                                     get_option('payplex_aicalling_agent_budget')]];
+        if ($canViewAll) {
+            $checks = ['Account' => [$this->aicalling_model->spendSince($since),
+                                      get_option('payplex_aicalling_account_budget')]] + $checks;
+        }
+        $out = [];
+        foreach ($checks as $label => $c) {
+            [$spend, $cap] = $c;
+            if (!is_numeric($cap) || (float) $cap <= 0) { continue; }
+            $pct = (float) $spend / (float) $cap * 100;
+            if ($pct >= 80) {
+                $out[] = sprintf('%s budget %.0f%% used (%.2f of %.2f) — calls refuse at 100%%.', $label, $pct, $spend, $cap);
+            }
+        }
+        return $out;
     }
 
     /* ---------------- Manager / team dashboard ---------------- */
@@ -293,6 +328,74 @@ class Aicalling extends AdminController
         show_404();
     }
 
+    /** Call transcript. */
+    public function transcript($callId)
+    {
+        $this->denyUnless($this->cap('transcript_access'));
+        $this->requireOwnershipOrViewAll($callId);
+        $call = $this->aicalling_model->getById((int) $callId);
+        if (!$call || !$call->transcript_available) {
+            show_404();
+        }
+
+        $client = new Payplex_api_client();
+        $res = $client->transcript($call->sonivo_call_id);
+        $this->payplex_audit_model->log('transcript.accessed', 'call', $call->sonivo_call_id);
+
+        $this->load->view('payplex_aicalling/transcript', [
+            'title'      => 'Call Transcript',
+            'call'       => $call,
+            'ok'         => (bool) $res['ok'],
+            'transcript' => $res['ok'] ? ($res['data'] ?? null) : null,
+            'error'      => $res['ok'] ? null : $this->apiErrorMessage($res),
+        ]);
+    }
+
+    /** api_client's 'error' is a string OR an array depending on the failure — normalize it here. */
+    private function apiErrorMessage($res)
+    {
+        $e = $res['error'] ?? null;
+        if (is_string($e) && $e !== '') { return $e; }
+        if (is_array($e) && !empty($e['message'])) { return $e['message']; }
+        return 'Could not load the transcript.';
+    }
+
+    /** Call detail: the mirror row plus its ordered event timeline. */
+    public function call_detail($callId)
+    {
+        $this->denyUnless($this->cap('view'));
+        $this->requireOwnershipOrViewAll($callId);
+        $call = $this->aicalling_model->getById((int) $callId);
+        if (!$call) {
+            show_404();
+        }
+        $this->load->view('payplex_aicalling/call_detail', [
+            'title'       => 'Call #' . (int) $call->id,
+            'call'        => $call,
+            'events'      => $this->aicalling_model->eventsForCall((int) $call->id),
+            'next_action' => $this->suggestNextAction($call),
+            'can_view_recording'  => $this->cap('recording_access'),
+            'can_view_transcript' => $this->cap('transcript_access'),
+        ]);
+    }
+
+    /**
+     * A suggestion, not backend data — derived only from what this call already told us.
+     * The callback date/time itself gets its own separate line in the view (and its own
+     * Reminder), so this never repeats it — kept apart to avoid the two reading as one mixed sentence.
+     */
+    private function suggestNextAction($call)
+    {
+        if (!empty($call->callback_date)) { return 'A callback was requested — see the reminder below.'; }
+        if ($call->status === 'failed') { return 'Retry the call.'; }
+        $map = ['pricing_request' => 'Send a quotation.', 'demo_request' => 'Schedule a demo.',
+                'not_interested'  => 'Mark as not interested — do not re-call.'];
+        $intent = strtolower((string) $call->detected_intent);
+        if (isset($map[$intent])) { return $map[$intent]; }
+        if ($call->disposition === 'interested') { return 'Follow up with a call or message.'; }
+        return null;
+    }
+
     /* ---------------- Settings (secrets encrypted at rest) ---------------- */
     public function settings()
     {
@@ -342,13 +445,39 @@ class Aicalling extends AdminController
                 }
             }
 
-            foreach (['base_url', 'timeout_connect', 'timeout_read', 'timezone', 'fallback_timezone',
+            foreach (['timeout_connect', 'timeout_read', 'timezone', 'fallback_timezone',
                       'max_per_day', 'max_per_week', 'cooldown_minutes', 'max_duration_sec',
-                      'agent_budget', 'account_budget', 'recording_disclosure'] as $f) {
+                      'agent_budget', 'account_budget', 'recording_disclosure', 'usd_inr_rate'] as $f) {
                 $val = $this->input->post($f, false);
                 if ($val !== null) {
                     update_option('payplex_aicalling_' . $f, trim((string) $val));
                     $changed[] = $f;
+                }
+            }
+
+            /*
+             * base_url is not like its neighbours above: none of them has a
+             * safe empty state to fall back to. timeout_connect/timeout_read
+             * fall back to a hardcoded default when blank ('' ?: 5), and
+             * fallback_timezone/the budgets/the disclosure are DESIGNED to
+             * refuse calling when blank. base_url has no such fallback
+             * anywhere downstream — Payplex_api_client only refuses when the
+             * request secret is blank, never when base_url is, so an empty
+             * base_url still reports itself as "configured" and every
+             * outbound call is sent to a bare path with no host, fails after
+             * four retries with a raw curl error, and "Settings saved." is
+             * shown exactly as it would be for a real value. Blank must be
+             * refused here, the same way an unusable calling window is.
+             */
+            $baseUrlPosted = $this->input->post('base_url', false);
+            if ($baseUrlPosted !== null) {
+                $newBaseUrl = trim((string) $baseUrlPosted);
+                if ($newBaseUrl === '') {
+                    set_alert('warning', 'Sonivo Base URL was not saved: it cannot be left blank, '
+                        . 'or every AI Calling action would fail. The previous value was kept.');
+                } elseif ((string) get_option('payplex_aicalling_base_url') !== $newBaseUrl) {
+                    update_option('payplex_aicalling_base_url', $newBaseUrl);
+                    $changed[] = 'base_url';
                 }
             }
 

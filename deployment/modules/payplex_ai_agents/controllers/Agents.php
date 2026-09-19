@@ -65,14 +65,6 @@ class Agents extends AdminController
             $this->m->setSetting('global_kill_switch', $this->input->post('global_kill_switch') ? 1 : 0, $this->actor());
             $this->m->setSetting('global_daily_budget', (float) $this->input->post('global_daily_budget'), $this->actor());
             $this->m->setSetting('global_monthly_budget', (float) $this->input->post('global_monthly_budget'), $this->actor());
-            $this->m->setSetting('pipeline_assign_roles', trim((string) $this->input->post('pipeline_assign_roles')), $this->actor());
-            $model = trim((string) $this->input->post('openrouter_model'));
-            $this->m->setSetting('openrouter_model', $model !== '' ? $model : Payplex_agent_llm::DEFAULT_MODEL, $this->actor());
-            $newKey = trim((string) $this->input->post('openrouter_api_key'));
-            if ($newKey !== '') { // blank = keep the stored key
-                $this->m->setSetting('openrouter_api_key', $newKey, $this->actor());
-                $this->m->audit(null, 'config_change', 'OpenRouter API key updated', array(), $this->actor());
-            }
             set_alert('success', 'Settings saved.');
             redirect(admin_url('payplex_ai_agents/agents/settings'));
         }
@@ -80,9 +72,6 @@ class Agents extends AdminController
         $data['global_kill']    = (int) $this->m->getSetting('global_kill_switch', 0) === 1;
         $data['daily_budget']   = $this->m->getSetting('global_daily_budget', 50);
         $data['monthly_budget'] = $this->m->getSetting('global_monthly_budget', 1000);
-        $data['assign_roles']   = $this->m->pipelineAssignRoles();
-        $data['llm_key_set']    = Payplex_agent_llm::resolveKey($this->m->getSetting('openrouter_api_key', '')) !== '';
-        $data['llm_model']      = $this->m->getSetting('openrouter_model', Payplex_agent_llm::DEFAULT_MODEL);
         $this->load->view('payplex_ai_agents/settings', $data);
     }
 
@@ -92,38 +81,25 @@ class Agents extends AdminController
     {
         $this->guard('create');
         if ($this->input->post()) {
-            $name        = trim((string) $this->input->post('name'));
-            $isDuplicate = $this->m->nameExists($name);
-            $confirmed   = (bool) $this->input->post('confirm_duplicate');
-
-            /*
-             * A duplicate name is not blocked, but it is not created silently
-             * either: the first submission comes back to the same form asking
-             * the user to confirm, same as a browser "are you sure" dialog.
-             * Only a submission that already carries that confirmation (or a
-             * unique name) actually creates the agent.
-             */
-            if ($isDuplicate && !$confirmed) {
-                $data['title']                 = 'Create AI Agent';
-                $data['agent']                 = (object) $this->input->post();
-                $data['is_edit']               = false;
-                $data['form_url']              = admin_url('payplex_ai_agents/agents/create');
-                $data['confirm_duplicate_name'] = $name;
-                $this->load->view('payplex_ai_agents/agent_form', $data);
-                return;
-            }
-
-            $id = $this->m->create($this->collect(), $this->actor());
-            if ($isDuplicate) {
-                set_alert('warning', "Duplicate agent created: an agent named '"
-                    . htmlspecialchars($name, ENT_QUOTES, 'UTF-8') . "' already existed.");
-            } else {
+            $data = $this->collect();
+            $errors = $this->validateAgentInput($data);
+            if (empty($errors)) {
+                $id = $this->m->create($data, $this->actor());
                 set_alert('success', 'Agent created in Sandbox mode (draft).');
+                redirect(admin_url('payplex_ai_agents/agents/view/' . (int) $id));
             }
-            redirect(admin_url('payplex_ai_agents/agents/view/' . (int) $id));
+            set_alert('warning', implode(' ', $errors));
+            $this->load->view('payplex_ai_agents/agent_form', array(
+                'title'   => 'Create AI Agent',
+                'agent'   => (object) $data,
+                'is_edit' => false,
+                'staff'   => $this->staffList(),
+            ));
+            return;
         }
         $data['title'] = 'Create AI Agent';
         $data['agent'] = null;
+        $data['staff'] = $this->staffList();
         $this->load->view('payplex_ai_agents/agent_form', $data);
     }
 
@@ -135,17 +111,85 @@ class Agents extends AdminController
             show_404();
         }
         if ($this->input->post()) {
-            $res = $this->m->update((int) $id, $this->collect(), $this->actor());
-            if ($res === 'locked') {
-                set_alert('warning', 'Agent is locked in its current status and cannot be edited. Create a new version instead.');
-            } else {
-                set_alert('success', 'Agent updated.');
+            $data = $this->collect();
+            $errors = $this->validateAgentInput($data, (int) $id);
+            if (empty($errors)) {
+                $res = $this->m->update((int) $id, $data, $this->actor());
+                if ($res === 'locked') {
+                    set_alert('warning', 'Agent is locked in its current status and cannot be edited. Create a new version instead.');
+                } else {
+                    set_alert('success', 'Agent updated.');
+                }
+                redirect(admin_url('payplex_ai_agents/agents/view/' . (int) $id));
             }
-            redirect(admin_url('payplex_ai_agents/agents/view/' . (int) $id));
+            set_alert('warning', implode(' ', $errors));
+            $this->load->view('payplex_ai_agents/agent_form', array(
+                'title'   => 'Edit AI Agent',
+                'agent'   => (object) array_merge($data, array('id' => (int) $id)),
+                'is_edit' => true,
+                'staff'   => $this->staffList(),
+            ));
+            return;
         }
         $data['title'] = 'Edit AI Agent';
         $data['agent'] = $agent;
+        $data['staff'] = $this->staffList();
         $this->load->view('payplex_ai_agents/agent_form', $data);
+    }
+
+    /** Active staff list for the Owner/Reviewer/Approver pickers. */
+    private function staffList()
+    {
+        $this->load->model('staff_model');
+        return $this->staff_model->get('', array('active' => 1));
+    }
+
+    /**
+     * Server-side validation - the HTML5 attributes on the form (required,
+     * min/max) are client-side only and trivially bypassed by a direct POST.
+     * Returns an array of human-readable error strings (empty = valid).
+     */
+    private function validateAgentInput($data, $excludeId = 0)
+    {
+        $errors = array();
+
+        if ($data['name'] === '') {
+            $errors[] = 'Name is required.';
+        } elseif (mb_strlen($data['name']) > 191) {
+            $errors[] = 'Name must be 191 characters or fewer.';
+        } elseif ($this->m->agentNameTaken($data['name'], $excludeId)) {
+            // Single-quoted, with any stray quote characters in the name stripped:
+            // set_alert()'s toast embeds this message unescaped inside a
+            // double-quoted JS string (see app_js_alerts()), so a raw " here
+            // would break it exactly like the Knowledge Base "Ask" bug did.
+            $errors[] = "An agent named '" . str_replace(array('"', "'"), '', $data['name']) . "' already exists - names must be unique.";
+        }
+
+        if ($data['confidence_threshold'] < 0 || $data['confidence_threshold'] > 1) {
+            $errors[] = 'Confidence threshold must be between 0 and 1.';
+        }
+
+        $nonNegativeLabels = array(
+            'retry_limit'            => 'Retry limit',
+            'daily_execution_limit'  => 'Daily execution limit',
+            'token_limit'            => 'Token limit',
+            'daily_budget'           => 'Daily budget',
+            'monthly_budget'         => 'Monthly budget',
+        );
+        foreach ($nonNegativeLabels as $f => $label) {
+            if ($data[$f] < 0) {
+                $errors[] = $label . ' cannot be negative.';
+            }
+        }
+
+        $staffLabels = array('owner_id' => 'Owner', 'reviewer_id' => 'Reviewer', 'approver_id' => 'Approver');
+        foreach ($staffLabels as $f => $label) {
+            if ($data[$f] > 0 && !$this->m->staffExists($data[$f])) {
+                $errors[] = $label . ' staff id ' . $data[$f] . ' does not match an active staff member.';
+            }
+        }
+
+        return $errors;
     }
 
     /** Collect + normalise form fields into a config array. */
@@ -199,37 +243,9 @@ class Agents extends AdminController
     public function use_template($slug)
     {
         $this->guard('create');
-        $tpl = $this->m->resolveTemplate($slug);
-        if (!$tpl) {
-            show_404();
-        }
-        $name        = isset($tpl['name']) ? $tpl['name'] : $slug;
-        $isDuplicate = $this->m->nameExists($name);
-        $confirmed   = (bool) $this->input->get('confirm_duplicate');
-
-        /*
-         * Same rule as the manual create form: a template that would produce
-         * an agent whose name already exists is not created silently. The
-         * first click comes back to the template list asking to confirm;
-         * only a click that already carries that confirmation creates it.
-         */
-        if ($isDuplicate && !$confirmed) {
-            $data['title']                  = 'Agent Templates';
-            $data['templates']              = $this->m->templates();
-            $data['confirm_duplicate_slug'] = $slug;
-            $data['confirm_duplicate_name'] = $name;
-            $this->load->view('payplex_ai_agents/templates', $data);
-            return;
-        }
-
         $newId = $this->m->createFromTemplate($slug, $this->actor());
         if ($newId) {
-            if ($isDuplicate) {
-                set_alert('warning', "Duplicate agent created: an agent named '"
-                    . htmlspecialchars($name, ENT_QUOTES, 'UTF-8') . "' already existed (from template).");
-            } else {
-                set_alert('success', 'Agent created from template in Sandbox mode.');
-            }
+            set_alert('success', 'Agent created from template in Sandbox mode.');
             redirect(admin_url('payplex_ai_agents/agents/view/' . (int) $newId));
         }
         show_404();
@@ -272,9 +288,13 @@ class Agents extends AdminController
         if (!empty($res['ok'])) {
             set_alert('success', 'Agent moved to "' . $res['to'] . '".');
         } else {
-            $msg = $res['error'] === 'maker_checker_violation'
-                ? 'Blocked: the approver must be different from the creator and submitter (maker-checker).'
-                : 'Action not allowed: ' . $res['error'];
+            if ($res['error'] === 'maker_checker_violation') {
+                $msg = 'Blocked: the approver must be different from the creator and submitter (maker-checker).';
+            } elseif ($res['error'] === 'not_designated_approver') {
+                $msg = 'Blocked: this agent has a specific approver configured - only that staff member may approve it.';
+            } else {
+                $msg = 'Action not allowed: ' . $res['error'];
+            }
             set_alert('warning', $msg);
         }
         redirect(admin_url('payplex_ai_agents/agents/view/' . (int) $id));
@@ -295,10 +315,6 @@ class Agents extends AdminController
     public function destroy($id)
     {
         $this->guard('edit');
-        if ($this->input->method() !== 'post') { // a GET link would bypass Perfex's CSRF protection
-            set_alert('warning', 'Invalid request.');
-            redirect(admin_url('payplex_ai_agents/agents'));
-        }
         $deleted = $this->m->deleteAgent((int) $id, $this->actor());
         if ($deleted) {
             set_alert('success', 'Agent deleted.');
@@ -311,10 +327,6 @@ class Agents extends AdminController
     public function kill($id)
     {
         $this->guard('activate');
-        if ($this->input->method() !== 'post') {
-            set_alert('warning', 'Invalid request.');
-            redirect(admin_url('payplex_ai_agents/agents/view/' . (int) $id));
-        }
         $agent = $this->m->get((int) $id);
         if (!$agent) {
             show_404();

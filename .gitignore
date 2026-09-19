@@ -10,6 +10,7 @@ mix-manifest.json
 .env
 .env.*
 !.env.example
+/application/config/app-config.php
 
 # PHP and application runtime files
 /application/cache/*
@@ -46,6 +47,3 @@ xampp/
 # Local bug tracking file
 bugs.csv
 README.txt
-
-# Local deployment overlay - not for the repo
-/deployment/
