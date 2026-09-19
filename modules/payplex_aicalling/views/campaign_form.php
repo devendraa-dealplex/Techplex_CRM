@@ -6,7 +6,9 @@
     <p class="text-muted">This creates the campaign in <b>pending approval</b>. A different user must approve it before it runs.</p>
     <?php echo form_open(admin_url('payplex_aicalling/campaigns/create')); ?>
       <div class="form-group"><label>Campaign name *</label>
-        <input class="form-control" name="name" required></div>
+        <input class="form-control" id="pp-campaign-name" name="name" required>
+        <span class="help-block" id="pp-dup-warning" style="display:none;color:#8a6d3b;background:#fcf8e3;border:1px solid #faebcc;border-radius:4px;padding:6px 10px;"></span>
+      </div>
       <div class="row">
         <div class="col-sm-6 form-group"><label>AI Agent</label>
           <select class="form-control" name="agent_id">
@@ -19,8 +21,8 @@
             <option value="hi-IN">Hindi</option>
           </select></div>
       </div>
-      <div class="form-group"><label>Objective</label>
-        <input class="form-control" name="objective" placeholder="e.g. Re-engage cold leads"></div>
+      <div class="form-group"><label>Objective / Script *</label>
+        <input class="form-control" name="objective" placeholder="e.g. Re-engage cold leads" required></div>
       <div class="row">
         <div class="col-sm-6 form-group"><label>Lead status</label>
           <select class="form-control" name="status_id" id="pp-status">
@@ -48,12 +50,43 @@
 <script>
 window.PP_AUD_URL = "<?php echo admin_url('payplex_aicalling/campaigns/audience_count'); ?>";
 (function ($) {
+  var audCount = null;
+
   function refresh() {
     $.getJSON(window.PP_AUD_URL, { status_id: $('#pp-status').val(), source_id: $('#pp-source').val() })
-      .done(function (r) { $('#pp-aud-count').text(r.count); });
+      .done(function (r) { audCount = r.count; $('#pp-aud-count').text(r.count); });
   }
   $('#pp-status, #pp-source').on('change', refresh);
   $(refresh);
+
+  $('form').on('submit', function (e) {
+    if (!$.trim($('input[name="objective"]').val())) {
+      e.preventDefault();
+      alert('Please enter a call script/objective before submitting.');
+      return;
+    }
+    if (audCount !== null && audCount <= 0) {
+      e.preventDefault();
+      alert('No leads match the selected Status/Source filter. Choose a different filter before submitting.');
+    }
+  });
+})(jQuery);
+window.PP_DUP_CHECK_URL = "<?php echo admin_url('payplex_aicalling/campaigns/check_duplicate'); ?>";
+(function ($) {
+  // Live warning only — the server re-checks and actually blocks on submit,
+  // so this can never be the only thing standing between a duplicate and creation.
+  $('#pp-campaign-name').on('blur', function () {
+    var name = $.trim($(this).val());
+    var box = $('#pp-dup-warning');
+    if (!name) { box.hide(); return; }
+    $.getJSON(window.PP_DUP_CHECK_URL, { name: name }).done(function (r) {
+      if (r && r.duplicate) {
+        box.text('A campaign named "' + name + '" already exists (status: ' + r.status + ').').show();
+      } else {
+        box.hide();
+      }
+    });
+  });
 })(jQuery);
 </script>
 </body></html>
