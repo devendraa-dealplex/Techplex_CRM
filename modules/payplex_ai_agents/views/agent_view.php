@@ -109,7 +109,7 @@ function jlist($v) { return is_array($v) ? implode(', ', $v) : (string) $v; }
       <div class="col-md-5">
         <div class="panel_s"><div class="panel-body">
           <h5 style="margin-top:0">Sandbox Test <span class="label label-info">dry-run</span></h5>
-          <p class="text-muted" style="font-size:12px">Runs the pipeline safely: no real calls, messages or CRM changes. Estimates tokens/cost and shows what would need approval.</p>
+          <p class="text-muted" style="font-size:12px">Runs the pipeline safely: no real calls, messages or CRM changes. Shows what would need approval. If an LLM key is configured (Settings) and the message matches permitted knowledge, only that message text is sent to the LLM and real token usage is recorded; otherwise tokens/cost are estimates.</p>
           <?php echo form_open(admin_url('payplex_ai_agents/agents/test/' . (int) $agent->id)); ?>
             <div class="form-group"><input class="form-control input-sm" name="t_name" placeholder="Sample lead name" value="Test Lead"></div>
             <div class="form-group"><input class="form-control input-sm" name="t_email" placeholder="Email" value="test@example.com"></div>
@@ -141,6 +141,18 @@ function jlist($v) { return is_array($v) ? implode(', ', $v) : (string) $v; }
             <td><?php echo (int) $r->blocked_actions; ?></td>
             <td><?php echo (int) $r->escalations; ?></td>
           </tr>
+          <?php $tx = json_decode((string) $r->transcript_json, true); if (!empty($tx) && is_array($tx)): ?>
+          <tr><td></td><td colspan="10" style="padding-top:0;border-top:0">
+            <details><summary class="text-muted" style="cursor:pointer">Transcript (<?php echo count($tx); ?> steps)</summary>
+              <ul style="margin:6px 0 0;padding-left:18px">
+              <?php foreach ($tx as $step): ?>
+                <li><span class="label label-<?php echo in_array($step['state'] ?? '', array('blocked', 'halted', 'error'), true) ? 'danger' : (in_array($step['state'] ?? '', array('escalate', 'needs_approval', 'skipped'), true) ? 'warning' : 'success'); ?>"><?php echo html_escape((string) ($step['type'] ?? '')); ?></span>
+                  <?php echo html_escape((string) ($step['message'] ?? '')); ?></li>
+              <?php endforeach; ?>
+              </ul>
+            </details>
+          </td></tr>
+          <?php endif; ?>
         <?php endforeach; endif; ?>
         </tbody>
       </table></div>

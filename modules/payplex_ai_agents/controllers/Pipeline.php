@@ -32,6 +32,8 @@ class Pipeline extends AdminController
         $this->guard('logs');
         $data['title']     = 'AI Agents - Pipeline Activity';
         $data['events']    = $this->m->pipelineEvents(200);
+        $data['lookups']   = $this->m->pipelineLookups($data['events']);
+        $data['assign_roles'] = $this->m->pipelineAssignRoles();
         $data['auto_run']  = (int) $this->m->getSetting('pipeline_auto_run', 0) === 1;
         $this->load->view('payplex_ai_agents/pipeline', $data);
     }

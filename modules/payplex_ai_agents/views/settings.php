@@ -21,6 +21,23 @@
           <div class="col-md-6"><div class="form-group"><label>Global monthly budget ($)</label><input class="form-control" name="global_monthly_budget" type="number" step="0.01" value="<?php echo html_escape((string) $monthly_budget); ?>"></div></div>
         </div>
 
+        <h5 style="margin-top:20px">Lead pipeline assignment</h5>
+        <div class="form-group">
+          <label>Suggest staff whose role contains</label>
+          <input class="form-control" name="pipeline_assign_roles" value="<?php echo html_escape((string) $assign_roles); ?>" placeholder="sales">
+          <p class="text-muted" style="font-size:11px;margin-bottom:0">Comma-separated role-name keywords (e.g. <code>sales, business development</code>). The lead pipeline only suggests active staff with a matching role. Leave blank to allow every active staff member.</p>
+        </div>
+
+        <h5 style="margin-top:20px">LLM provider (OpenRouter)</h5>
+        <p class="text-muted" style="font-size:12px">Used by the Sandbox Test when the message matches permitted knowledge. Only that message text and the matched knowledge entry are sent. Free models are limited (about 50 requests/day). An <code>OPENROUTER_API_KEY</code> environment variable on the server, if set, takes precedence over this key.</p>
+        <div class="row">
+          <div class="col-md-6"><div class="form-group"><label>API key <?php echo !empty($llm_key_set) ? '<span class="label label-success">configured</span>' : '<span class="label label-default">not set</span>'; ?></label>
+            <input class="form-control" name="openrouter_api_key" type="password" autocomplete="new-password" placeholder="<?php echo !empty($llm_key_set) ? 'Leave blank to keep the current key' : 'sk-or-v1-...'; ?>"></div></div>
+          <div class="col-md-6"><div class="form-group"><label>Model</label>
+            <input class="form-control" name="openrouter_model" value="<?php echo html_escape((string) $llm_model); ?>">
+            <p class="text-muted" style="font-size:11px;margin-bottom:0"><code>openrouter/free</code> auto-picks an available free model.</p></div></div>
+        </div>
+
         <button class="btn btn-primary" type="submit">Save settings</button>
         <a href="<?php echo admin_url('payplex_ai_agents/agents'); ?>" class="btn btn-default">Back</a>
       <?php echo form_close(); ?>

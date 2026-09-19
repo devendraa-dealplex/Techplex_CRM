@@ -35,6 +35,26 @@ class Goals extends AdminController
         return function_exists('is_admin') && is_admin();
     }
 
+    /** State changes must be POST (Perfex CSRF only protects POST; a GET link would bypass it). */
+    private function requirePost()
+    {
+        if ($this->input->method() !== 'post') {
+            set_alert('warning', 'Invalid request.');
+            redirect(admin_url('payplex_ai_agents/goals'));
+        }
+    }
+
+    /** Load an objective the actor may access, or bounce with a generic "not found". */
+    private function accessibleObjective($id)
+    {
+        $o = $this->m->objGet((int) $id);
+        if (!$o || !$this->m->objCanAccess($o, $this->actor(), $this->isAdmin())) {
+            set_alert('warning', 'Objective not found.');
+            redirect(admin_url('payplex_ai_agents/goals'));
+        }
+        return $o;
+    }
+
     private function defaultPeriod()
     {
         $q = (int) ceil(((int) date('n')) / 3);
@@ -61,7 +81,7 @@ class Goals extends AdminController
             $elapsed  = Payplex_agent_goals::elapsedFraction($o->period);
             $rows[] = array(
                 'o' => $o, 'kr_count' => count($krs), 'progress' => $progress,
-                'elapsed' => $elapsed, 'health' => Payplex_agent_goals::health($progress, $elapsed),
+                'elapsed' => $elapsed, 'health' => Payplex_agent_goals::displayHealth($o->status, count($krs), $progress, $elapsed),
             );
         }
 
@@ -87,6 +107,7 @@ class Goals extends AdminController
     public function store()
     {
         $this->guard('goals');
+        $this->requirePost();
         $res = $this->m->objCreate($this->input->post(), $this->actor());
         if (!empty($res['ok'])) {
             set_alert('success', 'Objective #' . $res['id'] . ' created. Add key results to make it measurable.');
@@ -99,8 +120,7 @@ class Goals extends AdminController
     public function view($id)
     {
         $this->guard('view');
-        $o = $this->m->objGet((int) $id);
-        if (!$o) { set_alert('warning', 'Objective not found.'); redirect(admin_url('payplex_ai_agents/goals')); }
+        $o = $this->accessibleObjective($id);
         $krs = $this->m->objKeyResults($o->id);
         $krRows = array();
         foreach ($krs as $kr) { $krRows[] = array('kr' => $kr, 'progress' => Payplex_agent_goals::keyResultProgress($kr)); }
@@ -112,7 +132,7 @@ class Goals extends AdminController
         $data['krRows']    = $krRows;
         $data['progress']  = $progress;
         $data['elapsed']   = $elapsed;
-        $data['health']    = Payplex_agent_goals::health($progress, $elapsed);
+        $data['health']    = Payplex_agent_goals::displayHealth($o->status, count($krs), $progress, $elapsed);
         $data['bounds']    = Payplex_agent_goals::periodBounds($o->period);
         $data['canManage'] = payplex_ai_agents_can('goals');
         $this->load->view('payplex_ai_agents/goals_view', $data);
@@ -121,6 +141,8 @@ class Goals extends AdminController
     public function addkr($objId)
     {
         $this->guard('goals');
+        $this->requirePost();
+        $this->accessibleObjective($objId);
         $res = $this->m->krAdd((int) $objId, $this->input->post(), $this->actor());
         set_alert(!empty($res['ok']) ? 'success' : 'warning',
             !empty($res['ok']) ? 'Key result added.' : 'Could not add key result: ' . implode(', ', $res['errors']));
@@ -130,7 +152,9 @@ class Goals extends AdminController
     public function updatekr($objId)
     {
         $this->guard('goals');
-        $res = $this->m->krUpdateCurrent((int) $this->input->post('kr_id'), $this->input->post('current'), $this->actor());
+        $this->requirePost();
+        $this->accessibleObjective($objId);
+        $res = $this->m->krUpdateCurrent((int) $this->input->post('kr_id'), $this->input->post('current'), $this->actor(), (int) $objId);
         set_alert(!empty($res['ok']) ? 'success' : 'warning',
             !empty($res['ok']) ? 'Progress updated.' : 'Could not update: ' . str_replace('_', ' ', (string) $res['error']));
         redirect(admin_url('payplex_ai_agents/goals/view/' . (int) $objId));
@@ -139,6 +163,8 @@ class Goals extends AdminController
     public function act($id, $action)
     {
         $this->guard('goals');
+        $this->requirePost();
+        $this->accessibleObjective($id);
         $res = $this->m->objTransition((int) $id, $action, $this->actor());
         set_alert(!empty($res['ok']) ? 'success' : 'warning',
             !empty($res['ok']) ? 'Objective -> ' . $res['status'] . '.' : 'Cannot ' . $action . ': ' . str_replace('_', ' ', (string) $res['error']));

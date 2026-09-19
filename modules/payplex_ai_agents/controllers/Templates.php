@@ -109,6 +109,10 @@ class Templates extends AdminController
     public function destroy($id)
     {
         $this->guard('edit');
+        if ($this->input->method() !== 'post') { // a GET link would bypass Perfex's CSRF protection
+            set_alert('warning', 'Invalid request.');
+            redirect(admin_url('payplex_ai_agents/templates'));
+        }
         $this->m->deleteCustomTemplate((int) $id, $this->actor());
         set_alert('success', 'Template deleted.');
         redirect(admin_url('payplex_ai_agents/templates'));

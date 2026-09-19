@@ -17,20 +17,26 @@
           <?php endif; ?>
         </div>
       </div>
-      <div class="alert alert-info" style="font-size:12px">Scores are computed live from real activity — decision packets submitted / approved / rejected / returned, council reviews filed, and average confidence — using a deterministic scorecard. An agent with no activity scores 0 and rates “no data”, never a flattering default.</div>
+      <div class="alert alert-info" style="font-size:12px">Scores are computed live from real decision packets (approved / rejected / returned), council reviews and votes. An agent is scored only after it has at least <strong><?php echo (int) Payplex_agent_scorecard::MIN_OUTCOMES; ?> decided packets</strong>; until then it shows “insufficient data” (or “no data” with no activity) and gets no score or rank, so there is never a flattering default. Votes and reviews add to contribution but are not outcomes. Templates and archived agents are not listed.</div>
+      <?php $scored = 0; foreach ($cards as $cc) { if (!Payplex_agent_scorecard::isUnscored($cc['rating'])) { $scored++; } } ?>
+      <p class="text-muted" style="font-size:12px"><strong><?php echo $scored; ?></strong> of <?php echo count($cards); ?> agents have enough decided packets to be scored.</p>
 
       <div class="table-responsive"><table class="table table-bordered" style="font-size:12px">
         <thead><tr><th>#</th><th>Agent</th><th>Company</th><th>Score</th><th>Rating</th><th>Submitted</th><th>Approved</th><th>Rejected</th><th>Returned</th><th>Reviews</th><th>Avg conf.</th></tr></thead>
         <tbody>
         <?php if (empty($cards)): ?><tr><td colspan="11" class="text-muted">No agents in scope.</td></tr>
-        <?php else: $rank=0; foreach ($cards as $c): $rank++; $rc=Payplex_agent_scorecard::ratingClass($c['rating']);
+        <?php else: $rank=0; foreach ($cards as $c): $rc=Payplex_agent_scorecard::ratingClass($c['rating']);
+          $ranked = !Payplex_agent_scorecard::isUnscored($c['rating']);
+          if ($ranked) { $rank++; }
           $s=$c['stats']; ?>
           <tr>
-            <td><?php echo $rank; ?></td>
+            <td><?php echo $ranked ? $rank : '<span class="text-muted">—</span>'; ?></td>
             <td><strong><?php echo html_escape($c['agent_name']); ?></strong></td>
             <td><?php echo $c['company'] ? html_escape($c['company']) : '<span class="text-muted">—</span>'; ?></td>
             <td style="min-width:120px">
+              <?php if ($ranked): ?>
               <div class="progress" style="margin:0;height:16px"><div class="progress-bar progress-bar-<?php echo $rc; ?>" style="width:<?php echo (int)$c['score']; ?>%;min-width:2em"><?php echo (int)$c['score']; ?></div></div>
+              <?php else: ?><span class="text-muted">—</span><?php endif; ?>
             </td>
             <td><span class="label label-<?php echo $rc; ?>"><?php echo str_replace('_',' ',$c['rating']); ?></span></td>
             <td><?php echo (int)$s['submitted']; ?></td>
@@ -43,7 +49,7 @@
         <?php endforeach; endif; ?>
         </tbody>
       </table></div>
-      <p class="text-muted" style="font-size:11px">Score = 35% approval quality + 30% contribution (approved + reviews, saturating) + 20% low-rework quality + 15% confidence.</p>
+      <p class="text-muted" style="font-size:11px">Score = 35% approval quality + 30% contribution (approved + reviews, saturating) + 20% low-rework quality + 15% confidence. Confidence is the agent's own reported figure; when there is none it is left out and the other weights are rescaled.</p>
     </div></div>
   </div>
 </div>

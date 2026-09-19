@@ -65,6 +65,14 @@ class Agents extends AdminController
             $this->m->setSetting('global_kill_switch', $this->input->post('global_kill_switch') ? 1 : 0, $this->actor());
             $this->m->setSetting('global_daily_budget', (float) $this->input->post('global_daily_budget'), $this->actor());
             $this->m->setSetting('global_monthly_budget', (float) $this->input->post('global_monthly_budget'), $this->actor());
+            $this->m->setSetting('pipeline_assign_roles', trim((string) $this->input->post('pipeline_assign_roles')), $this->actor());
+            $model = trim((string) $this->input->post('openrouter_model'));
+            $this->m->setSetting('openrouter_model', $model !== '' ? $model : Payplex_agent_llm::DEFAULT_MODEL, $this->actor());
+            $newKey = trim((string) $this->input->post('openrouter_api_key'));
+            if ($newKey !== '') { // blank = keep the stored key
+                $this->m->setSetting('openrouter_api_key', $newKey, $this->actor());
+                $this->m->audit(null, 'config_change', 'OpenRouter API key updated', array(), $this->actor());
+            }
             set_alert('success', 'Settings saved.');
             redirect(admin_url('payplex_ai_agents/agents/settings'));
         }
@@ -72,6 +80,9 @@ class Agents extends AdminController
         $data['global_kill']    = (int) $this->m->getSetting('global_kill_switch', 0) === 1;
         $data['daily_budget']   = $this->m->getSetting('global_daily_budget', 50);
         $data['monthly_budget'] = $this->m->getSetting('global_monthly_budget', 1000);
+        $data['assign_roles']   = $this->m->pipelineAssignRoles();
+        $data['llm_key_set']    = Payplex_agent_llm::resolveKey($this->m->getSetting('openrouter_api_key', '')) !== '';
+        $data['llm_model']      = $this->m->getSetting('openrouter_model', Payplex_agent_llm::DEFAULT_MODEL);
         $this->load->view('payplex_ai_agents/settings', $data);
     }
 
@@ -315,6 +326,10 @@ class Agents extends AdminController
     public function destroy($id)
     {
         $this->guard('edit');
+        if ($this->input->method() !== 'post') { // a GET link would bypass Perfex's CSRF protection
+            set_alert('warning', 'Invalid request.');
+            redirect(admin_url('payplex_ai_agents/agents'));
+        }
         $deleted = $this->m->deleteAgent((int) $id, $this->actor());
         if ($deleted) {
             set_alert('success', 'Agent deleted.');
@@ -327,6 +342,10 @@ class Agents extends AdminController
     public function kill($id)
     {
         $this->guard('activate');
+        if ($this->input->method() !== 'post') {
+            set_alert('warning', 'Invalid request.');
+            redirect(admin_url('payplex_ai_agents/agents/view/' . (int) $id));
+        }
         $agent = $this->m->get((int) $id);
         if (!$agent) {
             show_404();

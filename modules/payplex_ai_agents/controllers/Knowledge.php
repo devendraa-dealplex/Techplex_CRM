@@ -82,6 +82,10 @@ class Knowledge extends AdminController
     public function destroy($id)
     {
         $this->guard('knowledge');
+        if ($this->input->method() !== 'post') { // a GET link would bypass Perfex's CSRF protection
+            set_alert('warning', 'Invalid request.');
+            redirect(admin_url('payplex_ai_agents/knowledge'));
+        }
         $deleted = $this->m->kbDelete((int) $id, $this->actor());
         if ($deleted) {
             set_alert('success', 'Knowledge entry deleted.');

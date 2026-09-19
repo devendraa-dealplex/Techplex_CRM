@@ -43,7 +43,9 @@
             <td style="white-space:nowrap">
               <a href="<?php echo admin_url('payplex_ai_agents/knowledge/edit/' . (int) $e->id); ?>" class="btn btn-default btn-xs">Edit</a>
               <a href="<?php echo admin_url('payplex_ai_agents/knowledge/toggle/' . (int) $e->id); ?>" class="btn btn-default btn-xs"><?php echo (int) $e->is_active === 1 ? 'Disable' : 'Enable'; ?></a>
-              <a href="<?php echo admin_url('payplex_ai_agents/knowledge/destroy/' . (int) $e->id); ?>" class="btn btn-danger btn-xs" onclick="return confirm('Delete this knowledge entry? This cannot be undone.');">Delete</a>
+              <?php echo form_open(admin_url('payplex_ai_agents/knowledge/destroy/' . (int) $e->id), array('style' => 'display:inline-block;margin:0', 'onsubmit' => "return confirm('Delete this knowledge entry? This cannot be undone.');")); ?>
+                <button class="btn btn-danger btn-xs" type="submit">Delete</button>
+              <?php echo form_close(); ?>
             </td>
           </tr>
         <?php endforeach; endif; ?>
