@@ -383,7 +383,7 @@
 
     /* ==================================================== 3. booking drawer */
 
-    function openBookDrawer(leadId) {
+    function openBookDrawer(leadId, relType) {
         if (!PM.canCreate) {
             return;
         }
@@ -410,7 +410,7 @@
         $drawer.find('.pm-drawer-body').html('<div class="pm-tab-loading">' + esc(PM.lang.loading) + '</div>');
         $drawer.addClass('pm-open');
 
-        $.get(PM.base + '/book_form/' + leadId)
+        $.get(PM.base + '/book_form/' + leadId + (relType === 'customer' ? '?rel_type=customer' : ''))
             .done(function (html) {
                 $drawer.find('.pm-drawer-body').html(html);
                 $drawer.find('input,select,textarea').filter(':visible').first().trigger('focus');
@@ -509,6 +509,70 @@
         $box.html(html).show();
     }
 
+    /* ============================ customers list: meeting status + quick schedule */
+
+    var customerCache = {};
+
+    function customerCellHtml(id, ind) {
+        var bits = [];
+
+        if (ind && ind.overdue !== null && ind.overdue !== undefined) {
+            bits.push('<span class="pm-chip pm-chip-due"><i class="pm-dot"></i>' +
+                esc(PM.lang.overdue) + ' ' + esc(ind.overdue) + 'd</span>');
+        } else if (ind && ind.next) {
+            bits.push('<span class="pm-chip pm-chip-up"><i class="pm-dot"></i>' + esc(ind.next) + '</span>');
+        } else {
+            bits.push('<span class="pm-chip pm-chip-none">' + esc(PM.lang.no_meeting) + '</span>');
+        }
+
+        if (PM.canCreate) {
+            bits.push('<a href="javascript:void(0)" class="btn btn-default btn-xs pm-action" ' +
+                'data-pm-action="book" data-pm-rel="customer" data-pm-lead="' + id + '" ' +
+                'title="Schedule a meeting">Schedule</a>');
+        }
+
+        return bits.join(' ');
+    }
+
+    function paintCustomerRows() {
+        var ids = [];
+        var cells = {};
+
+        $('.table-clients .pca-meeting[data-pca-customer]').each(function () {
+            var $c = $(this);
+            var id = parseInt($c.data('pca-customer'), 10);
+            if (!id) { return; }
+            cells[id] = cells[id] || [];
+            cells[id].push($c);
+
+            if (customerCache[id]) {
+                $c.html(customerCellHtml(id, customerCache[id]));
+            } else if (ids.indexOf(id) === -1) {
+                ids.push(id);
+            }
+        });
+
+        if (!ids.length) { return; }
+
+        // One request for the whole visible page.
+        post(PM.base + '/lead_indicators', { ids: ids, rel_type: 'customer' })
+            .done(function (res) {
+                if (!res || !res.success) { return; }
+                $.each(res.data, function (id, ind) {
+                    customerCache[id] = ind;
+                    $.each(cells[id] || [], function (_, $c) { $c.html(customerCellHtml(id, ind)); });
+                });
+            })
+            .fail(function () {
+                $.each(cells, function (_, list) {
+                    $.each(list, function (_, $c) { $c.html('<span class="pm-chip pm-chip-none">&mdash;</span>'); });
+                });
+            });
+    }
+
+    // Delegated, because the customers DataTable is created by a later inline script.
+    $(document).on('draw.dt', '.table-clients', paintCustomerRows);
+
     /* ------------------------------------------------------- action dispatch */
 
     $(document).on('click', '.pm-action', function () {
@@ -518,7 +582,7 @@
         switch (action) {
             case 'book':
             case 'followup':
-                openBookDrawer(leadId);
+                openBookDrawer(leadId, $(this).data('pm-rel'));
                 break;
             case 'list':
                 window.location.href = PM.base + '?lead=' + leadId;

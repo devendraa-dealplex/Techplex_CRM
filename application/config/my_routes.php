@@ -10,9 +10,13 @@ defined('BASEPATH') or exit('No direct script access allowed');
  */
 
 /* ---- Video KYC: staff side (session + CSRF protected) ---- */
-$route['admin/video-kyc']                 = 'payplex_videokyc/videokyc/dashboard';
+$route['admin/video-kyc']                 = 'payplex_videokyc/videokyc/index';
 $route['admin/video-kyc/(:any)/(:any)']   = 'payplex_videokyc/videokyc/$1/$2';
 $route['admin/video-kyc/(:any)']          = 'payplex_videokyc/videokyc/$1';
+
+/* ---- Video KYC: customer portal (logged-in customer, own KYC only) ---- */
+$route['clients/video-kyc']               = 'payplex_videokyc/kyc_portal/index';
+$route['clients/video-kyc/(:any)']        = 'payplex_videokyc/kyc_portal/$1';
 
 /* ---- Video KYC: customer side (public, authorised by the link token) ----
  *

@@ -117,6 +117,20 @@ class Payplex_meetings_model extends App_Model
      */
     public function lead_indicators(array $lead_ids)
     {
+        return $this->indicators('lead', $lead_ids);
+    }
+
+    /**
+     * Same aggregate for any related record type ('lead' or 'customer'): the
+     * Customers list shows meeting status too.
+     *
+     * @param  string $rel_type 'lead' | 'customer'
+     * @param  array  $lead_ids ids of that record type
+     * @return array keyed by id
+     */
+    public function indicators($rel_type, array $lead_ids)
+    {
+        $rel_type = $rel_type === 'customer' ? 'customer' : 'lead';
         $lead_ids = array_values(array_filter(array_map('intval', $lead_ids)));
         if (empty($lead_ids)) {
             return [];
@@ -137,7 +151,7 @@ class Payplex_meetings_model extends App_Model
                                 THEN start_utc END)                          AS overdue_start_utc,
                        COUNT(*)                                              AS total_count
                   FROM `{$t}`
-                 WHERE rel_type = 'lead'
+                 WHERE rel_type = '{$rel_type}'
                    AND rel_id IN ({$in})
                  GROUP BY rel_id";
 

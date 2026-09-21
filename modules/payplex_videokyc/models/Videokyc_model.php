@@ -15,12 +15,13 @@ require_once __DIR__ . '/../libraries/Payplex_kyc_scripts.php';
  */
 class Videokyc_model extends App_Model
 {
-    const STATUSES = ['pending', 'in_progress', 'submitted', 'approved', 'rejected', 'expired'];
+    const STATUSES = ['pending', 'in_progress', 'submitted', 'approved', 'rejected', 'resubmit', 'expired'];
 
     private $req;
     private $vid;
     private $ntf;
     private $tpl;
+    private $doc;
 
     public function __construct()
     {
@@ -30,6 +31,7 @@ class Videokyc_model extends App_Model
         $this->vid = $p . 'payplex_vkyc_videos';
         $this->ntf = $p . 'payplex_vkyc_notifications';
         $this->tpl = $p . 'payplex_vkyc_templates';
+        $this->doc = $p . 'payplex_vkyc_documents';
     }
 
     /* ---------------------------------------------------------------- tokens */
@@ -74,6 +76,62 @@ class Videokyc_model extends App_Model
             ->update($this->req, ['status' => 'expired', 'updated_at' => date('Y-m-d H:i:s')]);
     }
 
+    /* ----------------------------------------------------------------- scope */
+
+    /**
+     * When set to a staff id, every read/list/lookup below is limited to that staff
+     * member's own customers (customer_admins) and leads (assigned / added by),
+     * plus requests they created. null = unrestricted (admins, `view_all`, and the
+     * public customer page, whose authority is the link token instead).
+     */
+    public $scopeStaff = null;
+
+    public function scopeTo($staffId)
+    {
+        $this->scopeStaff = $staffId === null ? null : (int) $staffId;
+        return $this;
+    }
+
+    /** SQL predicate restricting a requests row (columns rel_type, rel_id, created_by) to the scope. */
+    private function requestScopeSql()
+    {
+        if ($this->scopeStaff === null) {
+            return null;
+        }
+        $s = (int) $this->scopeStaff;
+        $p = db_prefix();
+        return "(created_by = {$s}"
+            . " OR (rel_type = 'customer' AND rel_id IN (SELECT customer_id FROM {$p}customer_admins WHERE staff_id = {$s}))"
+            . " OR (rel_type = 'lead' AND rel_id IN (SELECT id FROM {$p}leads WHERE assigned = {$s} OR addedfrom = {$s})))";
+    }
+
+    /** May the scoped staff member touch this customer? */
+    public function customerInScope($customerId)
+    {
+        if ($this->scopeStaff === null) {
+            return true;
+        }
+        return $this->db->where('customer_id', (int) $customerId)->where('staff_id', $this->scopeStaff)
+            ->count_all_results(db_prefix() . 'customer_admins') > 0;
+    }
+
+    /** May the scoped staff member touch this request row? */
+    public function requestInScope($r)
+    {
+        if ($this->scopeStaff === null) {
+            return true;
+        }
+        if ((int) $r->created_by === $this->scopeStaff) {
+            return true;
+        }
+        if ($r->rel_type === 'customer') {
+            return $this->customerInScope($r->rel_id);
+        }
+        return $this->db->where('id', (int) $r->rel_id)
+            ->group_start()->where('assigned', $this->scopeStaff)->or_where('addedfrom', $this->scopeStaff)->group_end()
+            ->count_all_results(db_prefix() . 'leads') > 0;
+    }
+
     /* -------------------------------------------------------------- subjects */
 
     /** Search leads or customers by name/email/phone for the "Generate link" picker. */
@@ -83,6 +141,9 @@ class Videokyc_model extends App_Model
         $out = [];
         if ($type === 'lead') {
             $this->db->select('id, name, email, phonenumber AS phone')->from(db_prefix() . 'leads');
+            if ($this->scopeStaff !== null) {
+                $this->db->group_start()->where('assigned', $this->scopeStaff)->or_where('addedfrom', $this->scopeStaff)->group_end();
+            }
             if ($q !== '') {
                 $this->db->group_start()->like('name', $q)->or_like('email', $q)->or_like('phonenumber', $q)->group_end();
             }
@@ -93,6 +154,9 @@ class Videokyc_model extends App_Model
             $this->db->select('c.userid AS id, c.company AS name, ct.email, COALESCE(NULLIF(ct.phonenumber, ""), c.phonenumber) AS phone', false)
                 ->from(db_prefix() . 'clients c')
                 ->join(db_prefix() . 'contacts ct', 'ct.userid = c.userid AND ct.is_primary = 1', 'left');
+            if ($this->scopeStaff !== null) {
+                $this->db->where('c.userid IN (SELECT customer_id FROM ' . db_prefix() . 'customer_admins WHERE staff_id = ' . (int) $this->scopeStaff . ')', null, false);
+            }
             if ($q !== '') {
                 $this->db->group_start()->like('c.company', $q)->or_like('ct.email', $q)->or_like('c.phonenumber', $q)->group_end();
             }
@@ -116,9 +180,15 @@ class Videokyc_model extends App_Model
             return null;
         }
         if ($type === 'lead') {
-            $r = $this->db->select('id, name, email, phonenumber AS phone')->where('id', $id)
-                ->get(db_prefix() . 'leads')->row();
+            $this->db->select('id, name, email, phonenumber AS phone')->where('id', $id);
+            if ($this->scopeStaff !== null) {
+                $this->db->group_start()->where('assigned', $this->scopeStaff)->or_where('addedfrom', $this->scopeStaff)->group_end();
+            }
+            $r = $this->db->get(db_prefix() . 'leads')->row();
         } else {
+            if (!$this->customerInScope($id)) {
+                return null;
+            }
             $r = $this->db->select('c.userid AS id, c.company AS name, ct.email, COALESCE(NULLIF(ct.phonenumber, ""), c.phonenumber) AS phone', false)
                 ->from(db_prefix() . 'clients c')
                 ->join(db_prefix() . 'contacts ct', 'ct.userid = c.userid AND ct.is_primary = 1', 'left')
@@ -224,7 +294,100 @@ class Videokyc_model extends App_Model
 
     public function get($id)
     {
-        return $this->db->where('id', (int) $id)->get($this->req)->row();
+        $r = $this->db->where('id', (int) $id)->get($this->req)->row();
+        // Out-of-scope requests read as "not found" so ids cannot be probed.
+        return ($r && $this->requestInScope($r)) ? $r : null;
+    }
+
+    /* ------------------------------------------------ identity documents (step 1) */
+
+    const DOC_TYPES = [
+        'pan'             => 'PAN card',
+        'aadhaar'         => 'Aadhaar',
+        'passport'        => 'Passport',
+        'voter_id'        => 'Voter ID',
+        'driving_licence' => 'Driving licence',
+        'other'           => 'Other identity document',
+    ];
+
+    public function addDocument(array $d)
+    {
+        $this->db->insert($this->doc, [
+            'customer_id'   => (int) $d['customer_id'],
+            'doc_type'      => $d['doc_type'],
+            'storage_path'  => $d['storage_path'],
+            'mime_type'     => $d['mime_type'],
+            'file_size'     => (int) $d['file_size'],
+            'sha256'        => $d['sha256'],
+            'upload_reason' => $d['upload_reason'],
+            'uploaded_by'   => (int) $d['uploaded_by'],
+            'uploaded_ip'   => $d['uploaded_ip'],
+            'user_agent'    => $d['user_agent'],
+            'created_at'    => date('Y-m-d H:i:s'),
+        ]);
+        return (int) $this->db->insert_id();
+    }
+
+    public function document($id)
+    {
+        return $this->db->where('id', (int) $id)->get($this->doc)->row();
+    }
+
+    /** @return array of document rows, newest first */
+    public function documentsFor($customerId)
+    {
+        return $this->db->where('customer_id', (int) $customerId)->order_by('id', 'DESC')->get($this->doc)->result();
+    }
+
+    public function hasDocuments($customerId)
+    {
+        return $this->db->where('customer_id', (int) $customerId)->count_all_results($this->doc) > 0;
+    }
+
+    /**
+     * The two-step state for one customer. Single source of truth: the view, the
+     * upload response and the generate_link gate all read this.
+     *
+     *   step1: 'pending' | 'completed'
+     *   step2: 'locked' | 'ready' | 'in_progress' | 'completed'
+     *
+     * step2 comes from the customer's most recent non-expired Video KYC request:
+     * pending/in_progress/submitted = in progress, approved = completed; a
+     * rejected or expired latest request puts them back to ready (link again).
+     */
+    public function flowState($customerId)
+    {
+        $docs   = $this->documentsFor($customerId);
+        $step1  = $docs ? 'completed' : 'pending';
+        $latest = $this->db->where('rel_type', 'customer')->where('rel_id', (int) $customerId)
+            ->order_by('id', 'DESC')->limit(1)->get($this->req)->row();
+
+        // The two steps are independent: the video can be recorded whenever the customer
+        // wants, with or without a document on file.
+        $step2 = 'ready';
+        if ($latest) {
+            if ($latest->status === 'approved') {
+                $step2 = 'completed';
+            } elseif (in_array($latest->status, ['pending', 'in_progress', 'submitted'], true)
+                      && strtotime($latest->expires_at) >= time()) {
+                $step2 = 'in_progress';
+            }
+        }
+        // A pending / in-progress link that has not been used yet can be reopened
+        // ("Continue Video KYC"); one already submitted for review cannot.
+        $resumable = $step2 === 'in_progress' && $latest && in_array($latest->status, ['pending', 'in_progress'], true);
+
+        return [
+            'resumable'  => $resumable,
+            'step1'      => $step1,
+            'step2'      => $step2,
+            'doc_count'  => count($docs),
+            'request_id' => $latest ? (int) $latest->id : null,
+            'request_status' => $latest ? $latest->status : null,
+            // What the reviewer told the customer (approve / reject / ask again), for the portal.
+            'review_note'    => ($latest && in_array($latest->status, ['approved', 'rejected', 'resubmit'], true) && ($vv = $this->latestVideo($latest->id))) ? (string) $vv->review_notes : '',
+            'reviewed_at'    => $latest ? $latest->reviewed_at : null,
+        ];
     }
 
     /**
@@ -317,7 +480,7 @@ class Videokyc_model extends App_Model
      */
     public function review($requestId, $decision, $staffId, $notes, array $checklist)
     {
-        $status = $decision === 'approve' ? 'approved' : 'rejected';
+        $status = ['approve' => 'approved', 'reject' => 'rejected', 'resubmit' => 'resubmit'][$decision];
         $now    = date('Y-m-d H:i:s');
         $this->db->where('id', (int) $requestId)->where('status', 'submitted')
             ->update($this->req, ['status' => $status, 'reviewed_at' => $now, 'updated_at' => $now]);
@@ -363,6 +526,9 @@ class Videokyc_model extends App_Model
     {
         $this->expireOverdue();
         $counts = array_fill_keys(self::STATUSES, 0);
+        if (($scope = $this->requestScopeSql()) !== null) {
+            $this->db->where($scope, null, false);
+        }
         foreach ($this->db->select('status, COUNT(*) c', false)->group_by('status')->get($this->req)->result() as $r) {
             $counts[$r->status] = (int) $r->c;
         }
@@ -378,11 +544,18 @@ class Videokyc_model extends App_Model
     }
 
     /** @return array [rows, total] */
-    public function listRequests($status, $q, $page, $perPage)
+    public function listRequests($status, $q, $page, $perPage, $customerId = 0)
     {
         $this->expireOverdue();
 
-        $apply = function () use ($status, $q) {
+        $scope = $this->requestScopeSql();
+        $apply = function () use ($status, $q, $scope, $customerId) {
+            if ($scope !== null) {
+                $this->db->where($scope, null, false);
+            }
+            if ($customerId > 0) {
+                $this->db->where('rel_type', 'customer')->where('rel_id', (int) $customerId);
+            }
             if ($status && in_array($status, self::STATUSES, true)) {
                 $this->db->where('status', $status);
             }

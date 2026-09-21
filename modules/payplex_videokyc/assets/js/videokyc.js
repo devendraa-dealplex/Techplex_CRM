@@ -7,7 +7,7 @@
 
   var K = window.KYC;
   var table = $('#kyc-table');
-  var state = { page: 1, perPage: parseInt(table.data('per-page'), 10) || 10, status: '', q: '' };
+  var state = { page: 1, perPage: parseInt(table.data('per-page'), 10) || 10, status: '', q: '', customerId: window.KYC.customerId || 0 };
   var chosen = null;          // subject picked in the generate modal
   var current = null;         // request open in the review modal
   var reviewIntent = null;
@@ -34,6 +34,7 @@
     submitted:   ['Awaiting review',          'warning'],
     approved:    ['Approved',                 'success'],
     rejected:    ['Rejected',                 'danger'],
+    resubmit:    ['Asked to resubmit',        'warning'],
     expired:     ['Expired',                  'default']
   };
   // Small language tag for non-English requests, e.g. "हिंदी".
@@ -91,7 +92,7 @@
 
   function loadList() {
     var tbody = table.find('tbody');
-    $.getJSON(K.base + '/list_requests', { page: state.page, per_page: state.perPage, status: state.status, q: state.q })
+    $.getJSON(K.base + '/list_requests', { page: state.page, per_page: state.perPage, status: state.status, q: state.q, customer_id: state.customerId })
       .done(function (r) {
         if (!r.rows.length) {
           tbody.html('<tr><td colspan="5" class="text-muted">No KYC requests found.</td></tr>');
@@ -215,6 +216,7 @@
   function searchSubjects() {
     var q = $.trim($('#kyc-subject-q').val());
     $.getJSON(K.base + '/subjects', { type: subjectType(), q: q }).done(function (r) {
+      if (chosen) { return; }   // a subject was picked (or preset) while this request was in flight
       var box = $('#kyc-subject-results');
       if (!r.items.length) { box.html('<div class="kyc-sr-empty">No matches.</div>'); return; }
       box.html(r.items.map(function (s, i) {
@@ -224,7 +226,7 @@
     });
   }
 
-  $('#kyc-open-generate').on('click', function () {
+  function openGenerate() {
     chosen = null;
     $('#kyc-subject-chosen').hide().empty();
     $('#kyc-subject-q').val('').show();
@@ -236,7 +238,8 @@
     updatePreview(); updateChannelHints();
     $('#kyc-generate-modal').modal('show');
     searchSubjects();
-  });
+  }
+  $('#kyc-open-generate').on('click', openGenerate);
 
   $('#kyc-subject-q').on('input', function () { clearTimeout(searchTimer); searchTimer = setTimeout(searchSubjects, 250); });
   $('input[name="kyc_subject_type"]').on('change', function () { chosen = null; $('#kyc-subject-chosen').hide(); $('#kyc-subject-q').show(); updatePreview(); updateChannelHints(); searchSubjects(); });
@@ -334,7 +337,7 @@
     $('#kyc-notes').val('');
     $('#kyc-decision-block').toggleClass('kyc-intent-approve', reviewIntent === 'approve').toggleClass('kyc-intent-reject', reviewIntent === 'reject');
 
-    if (v && (q.status === 'approved' || q.status === 'rejected')) {
+    if (v && (q.status === 'approved' || q.status === 'rejected' || q.status === 'resubmit')) {
       var c = v.checklist || {};
       $('#kyc-decided').show().html('<h5 class="kyc-sec">Decision</h5><p>' + badge(q.status) + ' by <strong>' + esc(v.verified_by || 'unknown') + '</strong> on ' + fmt(v.verified_at) +
         '</p>' + (v.review_notes ? '<blockquote>' + esc(v.review_notes) + '</blockquote>' : '') +
@@ -349,19 +352,114 @@
     if (!current) { return; }
     var data = { request_id: current.id, decision: decision, notes: $('#kyc-notes').val() };
     $('#kyc-checklist input').each(function () { if (this.checked) { data['check_' + $(this).data('check')] = 1; } });
-    if (decision === 'reject' && !$.trim(data.notes)) { $('#kyc-review-msg').html('<div class="alert alert-warning">Add a reason before rejecting.</div>'); return; }
+    if (decision !== 'approve' && !$.trim(data.notes)) { $('#kyc-review-msg').html('<div class="alert alert-warning">Write a note for the customer explaining what is wrong or needed. They will see it.</div>'); return; }
     if (decision === 'approve' && $('#kyc-checklist input:not(:checked)').length) { $('#kyc-review-msg').html('<div class="alert alert-warning">Tick every verification check before approving.</div>'); return; }
-    if (!window.confirm((decision === 'approve' ? 'Approve' : 'Reject') + ' this KYC? This is recorded against your name.')) { return; }
-    $('#kyc-approve, #kyc-reject').prop('disabled', true);
+    if (!window.confirm((decision === 'approve' ? 'Approve' : decision === 'reject' ? 'Reject' : 'Ask the customer to resubmit') + ' this KYC? This is recorded against your name.')) { return; }
+    $('#kyc-approve, #kyc-reject, #kyc-resubmit').prop('disabled', true);
     $.post(K.base + '/review', data, null, 'json')
-      .done(function () { $('#kyc-review-modal').modal('hide'); toast('success', 'KYC ' + (decision === 'approve' ? 'approved' : 'rejected') + '.'); refreshAll(); })
+      .done(function () { $('#kyc-review-modal').modal('hide'); toast('success', decision === 'resubmit' ? 'Customer asked to resubmit.' : 'KYC ' + (decision === 'approve' ? 'approved' : 'rejected') + '.'); refreshAll(); })
       .fail(function (xhr) { $('#kyc-review-msg').html('<div class="alert alert-danger">' + esc(fail(xhr)) + '</div>'); })
-      .always(function () { $('#kyc-approve, #kyc-reject').prop('disabled', false); });
+      .always(function () { $('#kyc-approve, #kyc-reject, #kyc-resubmit').prop('disabled', false); });
   }
   $('#kyc-approve').on('click', function () { decide('approve'); });
   $('#kyc-reject').on('click', function () { decide('reject'); });
+  $('#kyc-resubmit').on('click', function () { decide('resubmit'); });
+
+  /* ------------------------------------------- two-step flow (customer profile)
+   * The server owns the state (Videokyc_model::flowState) and refuses a Video KYC
+   * link while step 1 is pending. This only mirrors that state in the UI. */
+
+  var flow = $('#kyc-flow');
+  var LOCK_TIP = 'Please complete document upload to enable Video KYC';
+  var STEP2 = { locked: 'Locked', ready: 'Ready', in_progress: 'In progress', completed: 'Completed' };
+
+  function applyFlowState(st) {
+    var s1 = st.step1 === 'completed';
+    $('#kyc-step-1').toggleClass('is-done', s1).toggleClass('is-current', !s1)
+      .find('.kyc-step-dot i').attr('class', 'fa ' + (s1 ? 'fa-check' : 'fa-file-text-o'));
+
+    $('#kyc-step-2').attr('class', 'kyc-step kyc-step-' + st.step2)
+      .find('.kyc-step-dot i').attr('class', 'fa ' + (st.step2 === 'completed' ? 'fa-check' : st.step2 === 'locked' ? 'fa-lock' : 'fa-video-camera'));
+
+    var canStart = (st.step2 === 'ready' || st.resumable) && K.can.generate;
+    $('#kyc-start-video').prop('disabled', !canStart)
+      .html('<i class="fa fa-video-camera"></i> ' + (st.resumable ? 'Continue Video KYC' : st.step2 === 'in_progress' ? 'Awaiting review' : st.step2 === 'completed' ? 'Video KYC completed' : 'Start Video KYC'));
+    if (st.step2 === 'locked') { $('#kyc-start-wrap').attr('title', LOCK_TIP); } else { $('#kyc-start-wrap').removeAttr('title'); }
+    $('#kyc-lock-note').toggle(st.step2 === 'locked');
+  }
+
+  function setDocMsg(type, text) {
+    $('#kyc-doc-msg').attr('class', 'kyc-doc-msg text-' + type).text(text);
+  }
+
+  if (flow.length) {
+    $('#kyc-doc-form').on('submit', function (e) {
+      e.preventDefault();
+      var type = $('#kyc-doc-type').val(), file = $('#kyc-doc-file')[0].files[0], reason = $.trim($('#kyc-doc-reason').val());
+      if (!type) { setDocMsg('danger', 'Choose the document type.'); return; }
+      if (!file) { setDocMsg('danger', 'Choose a file to upload.'); return; }
+      if (!/\.(pdf|jpe?g|png)$/i.test(file.name)) { setDocMsg('danger', 'Only PDF, JPG or PNG files are accepted.'); return; }
+      if (file.size > 5 * 1048576) { setDocMsg('danger', 'The file is too large (max 5 MB).'); return; }
+      if (reason.length < 10) { setDocMsg('danger', 'Give a reason of at least ten characters.'); return; }
+
+      var fd = new FormData();
+      fd.append('customer_id', flow.data('customer-id'));
+      fd.append('doc_type', type);
+      fd.append('reason', reason);
+      fd.append('document', file);
+      // FormData bypasses Perfex's ajaxSetup CSRF injection, so add the token explicitly.
+      if (window.csrfData && csrfData.token_name) { fd.append(csrfData.token_name, csrfData.hash); }
+
+      var btn = $('#kyc-doc-submit').prop('disabled', true);
+      setDocMsg('muted', 'Uploading…');
+      $.ajax({ url: K.base + '/upload_document', type: 'POST', data: fd, processData: false, contentType: false, dataType: 'json' })
+        .done(function (r) {
+          setDocMsg('success', r.message);
+          var d = r.document;
+          $('#kyc-doc-table .kyc-doc-empty').remove();
+          $('#kyc-doc-table tbody').prepend(
+            '<tr><td>' + esc(d.type_label) + '</td><td>' + esc(d.uploaded_at) + '</td><td>' + esc(d.uploaded_by) + '</td><td>' + esc(d.reason) +
+            '</td><td><code title="' + esc(d.sha256) + '">' + esc(d.sha_short) + '…</code></td><td><a class="btn btn-default btn-xs" target="_blank" rel="noopener" href="' +
+            esc(d.url) + '">View</a></td></tr>');
+          $('#kyc-doc-form')[0].reset();
+          applyFlowState(r.state);
+        })
+        .fail(function (xhr) { setDocMsg('danger', fail(xhr)); })
+        .always(function () { btn.prop('disabled', false); });
+    });
+
+    // "Start Video KYC": the server issues a link and the browser goes straight to
+    // the capture page. Nothing is sent by email/SMS/WhatsApp. The tab is opened
+    // synchronously (inside the click) so pop-up blockers allow it, then pointed at
+    // the link once the server answers.
+    $('#kyc-start-video').on('click', function () {
+      var btn = $(this);
+      if (btn.prop('disabled')) { return; }
+      var win = window.open('', '_blank');
+      btn.prop('disabled', true);
+      $.post(K.base + '/start_now', { customer_id: flow.data('customer-id') }, null, 'json')
+        .done(function (r) {
+          if (win) { win.location.href = r.url; } else { window.location.href = r.url; }
+          applyFlowState(r.state);
+        })
+        .fail(function (xhr) {
+          if (win) { win.close(); }
+          toast('danger', fail(xhr));
+          $.getJSON(K.base + '/flow_state/' + flow.data('customer-id')).done(function (r) { applyFlowState(r.state); });
+        });
+    });
+
+    // Keep the stepper honest if the recording finishes while this tab stays open.
+    setInterval(function () {
+      if (!document.hidden) {
+        $.getJSON(K.base + '/flow_state/' + flow.data('customer-id')).done(function (r) { applyFlowState(r.state); });
+      }
+    }, 20000);
+  }
 
   /* ---------------------------------------------------------------- boot */
-  refreshAll();
-  setInterval(function () { if (!$('.modal.in').length && !document.hidden) { refreshAll(); } }, 30000);   // near-live without hammering the server
+  if (table.length) {
+    refreshAll();
+    setInterval(function () { if (!$('.modal.in').length && !document.hidden) { refreshAll(); } }, 30000);   // near-live without hammering the server
+  }   // near-live without hammering the server
 })(window.jQuery);

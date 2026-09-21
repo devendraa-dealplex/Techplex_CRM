@@ -4,7 +4,7 @@
     <div>
         <h4><?php echo pm_lang('pm_book_meeting'); ?></h4>
         <span class="pm-muted">
-            <?php echo pm_lang('pm_lead'); ?> #<?php echo (int) $lead->id; ?> ·
+            <?php echo (isset($rel_type) && $rel_type === 'customer') ? 'Customer' : pm_lang('pm_lead'); ?> #<?php echo (int) $lead->id; ?> ·
             <?php echo pm_lang('pm_prefilled'); ?>
         </span>
     </div>
@@ -23,6 +23,7 @@
 
 <form id="pm-book-form" autocomplete="off">
     <input type="hidden" name="lead_id" value="<?php echo (int) $lead->id; ?>">
+    <input type="hidden" name="rel_type" value="<?php echo html_escape(isset($rel_type) ? $rel_type : 'lead'); ?>">
     <input type="hidden" name="timezone" value="<?php echo html_escape($tz); ?>">
 
     <div class="pm-conflicts" style="display:none"></div>

@@ -76,6 +76,7 @@ $v = @filemtime(__DIR__ . '/../assets/js/kyc-capture.js') ?: 1;
     <div class="kc-check" aria-hidden="true">&#10003;</div>
     <h1 data-i18n="done_title">Submitted</h1>
     <p data-i18n="done_text">Thank you. Your video has been received and will be reviewed shortly. You can close this page.</p>
+    <div class="kc-actions"><a class="kc-btn kc-primary" id="btn-home" href="<?php echo html_escape(site_url('clients/video-kyc')); ?>" data-i18n="back_home">Back to home</a></div>
   </section>
 </main>
 <script>window.KYC_PUBLIC = <?php echo $cfg; ?>;</script>

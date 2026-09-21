@@ -119,7 +119,11 @@ class Meetings extends AdminController
 
         $ids  = $this->input->post('ids');
         $ids  = is_array($ids) ? $ids : [];
-        $rows = $this->pm->lead_indicators($ids);
+        $rel  = $this->relType($this->input->post('rel_type'));
+        if ($rel === 'customer') {
+            $ids = array_values(array_filter($ids, function ($i) { return $this->customerAccessible($i); }));
+        }
+        $rows = $this->pm->indicators($rel, $ids);
         $tz   = pm_timezone();
         $out  = [];
 
@@ -163,11 +167,18 @@ class Meetings extends AdminController
     {
         $this->guard('create');
 
-        $lead = $this->db->where('id', (int) $lead_id)->get(db_prefix() . 'leads')->row();
+        $rel = $this->relType($this->input->get('rel_type'));
+
+        if ($rel === 'customer') {
+            $lead = $this->customerAsLead((int) $lead_id);
+        } else {
+            $lead = $this->db->where('id', (int) $lead_id)->get(db_prefix() . 'leads')->row();
+        }
         if (!$lead) {
             show_404();
         }
 
+        $data['rel_type']  = $rel;
         $data['lead']      = $lead;
         $data['staff']     = $this->db->select('staffid, firstname, lastname, email')
                                       ->where('active', 1)->get(db_prefix() . 'staff')->result();
@@ -198,8 +209,13 @@ class Meetings extends AdminController
             $this->json(['success' => false, 'message' => pm_lang('pm_err_time_invalid')]);
         }
 
+        $rel = $this->relType($this->input->post('rel_type'));
+        if ($rel === 'customer' && !$this->customerAccessible((int) $this->input->post('lead_id'))) {
+            $this->json(['success' => false, 'message' => pm_lang('pm_access_denied')], 403);
+        }
+
         $data = [
-            'rel_type'                   => 'lead',
+            'rel_type'                   => $rel,
             'rel_id'                     => (int) $this->input->post('lead_id'),
             'subject'                    => trim((string) $this->input->post('subject')),
             'agenda'                     => $this->input->post('agenda'),
@@ -334,7 +350,7 @@ class Meetings extends AdminController
         }
 
         $probe = [
-            'rel_type'         => 'lead',
+            'rel_type'         => $this->relType($this->input->post('rel_type')),
             'rel_id'           => (int) $this->input->post('lead_id'),
             'subject'          => (string) $this->input->post('subject'),
             'start_utc'        => $startUtc,
@@ -491,6 +507,55 @@ class Meetings extends AdminController
         $diff = time() - strtotime($utc . ' UTC');
 
         return max(0, (int) floor($diff / 86400));
+    }
+
+    /** Only the record types meetings can hang off. Anything else is a lead. */
+    protected function relType($value)
+    {
+        return $value === 'customer' ? 'customer' : 'lead';
+    }
+
+    /**
+     * May this staff member attach a meeting to / see the status of this customer?
+     * Same rule as the Customers list: everyone with "view customers", otherwise only
+     * the customers they administer.
+     */
+    protected function customerAccessible($customer_id)
+    {
+        $customer_id = (int) $customer_id;
+
+        return $customer_id > 0 && (staff_can('view', 'customers') || is_customer_admin($customer_id));
+    }
+
+    /**
+     * A customer shaped like the lead the booking form expects: name, company,
+     * email, phone of the PRIMARY CONTACT (company phone as fallback).
+     */
+    protected function customerAsLead($customer_id)
+    {
+        if (!$this->customerAccessible($customer_id)) {
+            return null;
+        }
+
+        $row = $this->db->select('c.userid AS id, c.company, c.phonenumber AS company_phone, '
+                . 'ct.firstname, ct.lastname, ct.email, ct.phonenumber AS contact_phone')
+            ->from(db_prefix() . 'clients c')
+            ->join(db_prefix() . 'contacts ct', 'ct.userid = c.userid AND ct.is_primary = 1', 'left')
+            ->where('c.userid', (int) $customer_id)->get()->row();
+
+        if (!$row) {
+            return null;
+        }
+
+        $name = trim($row->firstname . ' ' . $row->lastname);
+
+        return (object) [
+            'id'          => (int) $row->id,
+            'name'        => $name !== '' ? $name : (string) $row->company,
+            'company'     => (string) $row->company,
+            'email'       => (string) $row->email,
+            'phonenumber' => (string) ($row->contact_phone !== '' && $row->contact_phone !== null ? $row->contact_phone : $row->company_phone),
+        ];
     }
 
     protected function guard($capability)

@@ -16,6 +16,9 @@ class Videokyc extends AdminController
     {
         parent::__construct();
         $this->load->model('payplex_videokyc/videokyc_model', 'kyc');
+        // Admins and holders of `view_all` see everything; everyone else (sales) is
+        // limited to their own customers, leads and requests.
+        $this->kyc->scopeTo($this->can('view_all') ? null : get_staff_user_id());
     }
 
     /* ------------------------------------------------------------ helpers */
@@ -56,7 +59,7 @@ class Videokyc extends AdminController
         return [
             'title'  => $title,
             'can'    => [
-                'generate' => $this->can('generate'),
+                'generate' => false,   // customers complete KYC themselves; staff only review
                 'review'   => $this->can('review'),
                 'video'    => $this->can('video_access'),
                 'settings' => $this->can('settings'),
@@ -76,6 +79,10 @@ class Videokyc extends AdminController
         redirect(admin_url('video-kyc/dashboard'));
     }
 
+    /**
+     * Staff-side review console (all customers and leads). Deliberately NOT part of
+     * the customer profile: the profile only shows that customer's two-step flow.
+     */
     public function dashboard()
     {
         $this->need('view');
@@ -115,17 +122,10 @@ class Videokyc extends AdminController
             (string) $this->input->get('status'),
             trim((string) $this->input->get('q')),
             $page,
-            $per
+            $per,
+            (int) $this->input->get('customer_id')
         );
         $this->json(['success' => true, 'rows' => $rows, 'total' => $total, 'page' => $page, 'per_page' => $per]);
-    }
-
-    /** GET /admin/video-kyc/subjects?type=lead|customer&q= — picker for the generate form. */
-    public function subjects()
-    {
-        $this->need('generate');
-        $type = $this->input->get('type') === 'customer' ? 'customer' : 'lead';
-        $this->json(['success' => true, 'items' => $this->kyc->searchSubjects($type, (string) $this->input->get('q'))]);
     }
 
     /** GET /admin/video-kyc/detail/<id> — everything the review modal needs. */
@@ -160,118 +160,66 @@ class Videokyc extends AdminController
         $this->json(['success' => true, 'request' => $out]);
     }
 
-    /**
-     * POST /admin/video-kyc/generate_link
-     * customer_type, customer_id, template_id, expires_hours, channels[]
-     *
-     * Name/email/phone are re-read from the CRM here — nothing identity-related
-     * is trusted from the browser.
-     */
-    public function generate_link()
+
+    /* ------------------------------------------------ identity documents (step 1) */
+    /** GET /admin/video-kyc/flow_state/<customerId> — the two-step state as JSON. */
+    public function flow_state($customerId = 0)
     {
-        $this->postOnly();
-        $this->need('generate');
-
-        $type    = $this->input->post('customer_type') === 'customer' ? 'customer' : 'lead';
-        $subject = $this->kyc->subject($type, (int) $this->input->post('customer_id'));
-        if (!$subject) {
-            return $this->json(['success' => false, 'message' => 'Select a valid customer or lead.'], 422);
+        $this->need('view');
+        if (!$this->kyc->subject('customer', (int) $customerId)) {
+            return $this->json(['success' => false, 'message' => 'Customer not found.'], 404);
         }
-
-        $channels = array_values(array_intersect(Payplex_kyc_notifier::CHANNELS, (array) $this->input->post('channels')));
-        if (!$channels) {
-            return $this->json(['success' => false, 'message' => 'Choose at least one delivery channel.'], 422);
-        }
-
-        $hours = (int) $this->input->post('expires_hours');
-        if ($hours < 1 || $hours > 24 * 14) {
-            return $this->json(['success' => false, 'message' => 'Expiry must be between 1 hour and 14 days.'], 422);
-        }
-
-        $lang = $this->input->post('script_language');
-        $lang = ($lang === null || $lang === '') ? Payplex_kyc_scripts::DEFAULT_LANG : $lang;
-        if (!Payplex_kyc_scripts::isValid($lang)) {
-            return $this->json(['success' => false, 'message' => 'Choose a supported script language (English, Hindi or Marathi).'], 422);
-        }
-
-        $tpl = (int) $this->input->post('template_id') ? $this->kyc->template((int) $this->input->post('template_id')) : $this->kyc->defaultTemplate();
-        if (!$tpl || !$tpl->active) {
-            return $this->json(['success' => false, 'message' => 'Select an active script template.'], 422);
-        }
-
-        // Guard against double-clicks / duplicate links to the same subject.
-        $open = $this->db->where('rel_type', $type)->where('rel_id', $subject['id'])
-            ->where_in('status', ['pending', 'in_progress', 'submitted'])->where('expires_at >=', date('Y-m-d H:i:s'))
-            ->count_all_results(db_prefix() . 'payplex_vkyc_requests');
-        if ($open > 0 && !$this->input->post('force')) {
-            return $this->json(['success' => false, 'code' => 'open_request_exists',
-                'message' => 'This person already has an open KYC request. Use Resend on it, or confirm to create another.'], 409);
-        }
-
-        list($raw, $hash) = $this->kyc->newToken();
-        $id = $this->kyc->createRequest([
-            'token_hash'     => $hash,
-            'rel_type'       => $type,
-            'rel_id'         => $subject['id'],
-            'customer_name'  => $subject['name'],
-            'customer_email' => $subject['email'],
-            'customer_phone' => $subject['phone'],
-            'template_id'    => $tpl->id,
-            'dynamic_script' => Videokyc_model::renderScript($tpl, $subject['name'], $lang),
-            'script_language' => $lang,
-            'expires_at'     => date('Y-m-d H:i:s', time() + $hours * 3600),
-            'created_by'     => get_staff_user_id(),
-        ]);
-
-        $req     = $this->kyc->get($id);
-        $notify  = new Payplex_kyc_notifier($this->kyc);
-        $results = $notify->dispatch($req, $raw, $channels);
-
-        log_activity('Video KYC link generated for ' . $type . ' #' . $subject['id'] . ' [request #' . $id . ']');
-
-        $this->json([
-            'success'  => true,
-            'id'       => $id,
-            'language' => $lang,
-            'results'  => $results,
-            'message'  => $this->summarise($results),
-        ]);
+        $this->json(['success' => true, 'state' => $this->kyc->flowState((int) $customerId)]);
     }
 
-    /** POST /admin/video-kyc/resend/<id> — new token, new expiry, old link dies. */
-    public function resend($id = 0)
+    /** GET /admin/video-kyc/document/<id> — streams a document after re-verifying its hash. */
+    public function document($id = 0)
     {
-        $this->postOnly();
-        $this->need('generate');
-
-        $hours = (int) get_option('payplex_videokyc_link_ttl_hours') ?: 48;
-        $raw   = $this->kyc->reissue((int) $id, date('Y-m-d H:i:s', time() + $hours * 3600));
-        if ($raw === false) {
-            return $this->json(['success' => false, 'message' => 'This request cannot be resent (missing or already approved).'], 409);
+        $this->need('documents');
+        $d = $this->kyc->document((int) $id);
+        if (!$d || !$this->kyc->customerInScope($d->customer_id)) {
+            show_404();
         }
-        $req      = $this->kyc->get((int) $id);
-        $channels = (array) $this->input->post('channels');
-        $channels = $channels ? array_intersect(Payplex_kyc_notifier::CHANNELS, $channels) : Payplex_kyc_notifier::CHANNELS;
+        $base = realpath(FCPATH . 'uploads/payplex_videokyc');
+        $path = realpath($base . DIRECTORY_SEPARATOR . $d->storage_path);
+        if (!$base || !$path || strpos($path, $base . DIRECTORY_SEPARATOR) !== 0 || !is_file($path)) {
+            show_404();
+        }
+        if (!hash_equals((string) $d->sha256, hash_file('sha256', $path))) {
+            log_activity('Video KYC document REFUSED, hash mismatch [document #' . (int) $d->id . ']');
+            show_error('The stored file does not match its recorded hash, so it will not be served.', 409);
+        }
+        log_activity('Video KYC identity document viewed [document #' . (int) $d->id . ', customer #' . (int) $d->customer_id . ']');
 
-        $results = (new Payplex_kyc_notifier($this->kyc))->dispatch($req, $raw, $channels);
-        log_activity('Video KYC link re-sent [request #' . (int) $id . ']');
-        $this->json(['success' => true, 'results' => $results, 'message' => $this->summarise($results)]);
+        while (ob_get_level()) {
+            ob_end_clean();
+        }
+        header('Content-Type: ' . $d->mime_type);
+        header('Content-Length: ' . filesize($path));
+        header('Content-Disposition: inline; filename="document-' . (int) $d->id . '.' . pathinfo($path, PATHINFO_EXTENSION) . '"');
+        header('Cache-Control: private, no-store, no-cache, must-revalidate, max-age=0');
+        header('X-Content-Type-Options: nosniff');
+        readfile($path);
+        exit;
     }
 
-    /** POST /admin/video-kyc/review — decision=approve|reject, notes, checklist[] */
+    /** POST /admin/video-kyc/review — decision=approve|reject|resubmit, notes, checklist[] */
     public function review()
     {
         $this->postOnly();
         $this->need('review');
 
         $id       = (int) $this->input->post('request_id');
+        if (!$this->kyc->get($id)) {
+            return $this->json(['success' => false, 'message' => 'Request not found.'], 404);
+        }
         $decision = $this->input->post('decision');
         $notes    = trim((string) $this->input->post('notes'));
-        if (!in_array($decision, ['approve', 'reject'], true)) {
+        if (!in_array($decision, ['approve', 'reject', 'resubmit'], true)) {
             return $this->json(['success' => false, 'message' => 'Invalid decision.'], 422);
         }
-        if ($decision === 'reject' && $notes === '') {
-            return $this->json(['success' => false, 'message' => 'A reason is required when rejecting.'], 422);
+        if ($decision !== 'approve' && $notes === '') {
+            return $this->json(['success' => false, 'message' => 'Tell the customer why (a reason is required when rejecting or asking again).'], 422);
         }
 
         // Approving requires the reviewer to have actually completed the checklist.
@@ -287,8 +235,9 @@ class Videokyc extends AdminController
         if (!$this->kyc->review($id, $decision, get_staff_user_id(), mb_substr($notes, 0, 2000), $checklist)) {
             return $this->json(['success' => false, 'message' => 'This submission is no longer awaiting review (someone else may have decided it).'], 409);
         }
-        log_activity('Video KYC ' . ($decision === 'approve' ? 'approved' : 'rejected') . ' [request #' . $id . ']');
-        $this->json(['success' => true, 'status' => $decision === 'approve' ? 'approved' : 'rejected']);
+        $final = ['approve' => 'approved', 'reject' => 'rejected', 'resubmit' => 'resubmit'][$decision];
+        log_activity('Video KYC ' . $final . ' [request #' . $id . ']');
+        $this->json(['success' => true, 'status' => $final]);
     }
 
     /**
@@ -299,7 +248,7 @@ class Videokyc extends AdminController
     {
         $this->need('video_access');
         $v = $this->kyc->video((int) $videoId);
-        if (!$v) {
+        if (!$v || !$this->kyc->get($v->request_id)) {
             show_404();
         }
         $base = realpath(FCPATH . 'uploads/payplex_videokyc');

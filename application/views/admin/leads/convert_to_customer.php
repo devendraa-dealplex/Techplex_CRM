@@ -145,39 +145,6 @@
       } ?>
                 <?php echo form_hidden('original_lead_email', $lead->email); ?>
 
-                <!-- fake fields are a workaround for chrome autofill getting the wrong fields -->
-                <input type="text" class="fake-autofill-field" name="fakeusernameremembered" value='' tabindex="-1" />
-                <input type="password" class="fake-autofill-field" name="fakepasswordremembered" value=''
-                    tabindex="-1" />
-
-                <div class="client_password_set_wrapper">
-                    <label for="password" class="control-label"><?php echo _l('client_password'); ?></label>
-                    <div class="input-group">
-                        <input type="password" class="form-control password" name="password" autocomplete="off">
-                        <span class="input-group-addon tw-border-l-0">
-                            <a href="#password" class="show_password"
-                                onclick="showPassword('password');return false;"><i class="fa fa-eye"></i></a>
-                        </span>
-                        <span class="input-group-addon">
-                            <a href="#" class="generate_password" onclick="generatePassword(this);return false;"><i
-                                    class="fa fa-refresh"></i></a>
-                        </span>
-                    </div>
-                </div>
-                <?php if (is_email_template_active('contact-set-password')) { ?>
-                <div class="checkbox checkbox-primary">
-                    <input type="checkbox" name="send_set_password_email" id="send_set_password_email">
-                    <label for="send_set_password_email">
-                        <?php echo _l('client_send_set_password_email'); ?>
-                    </label>
-                </div>
-                <?php } ?>
-                <?php if (is_email_template_active('new-client-created')) { ?>
-                <div class="checkbox checkbox-primary">
-                    <input type="checkbox" name="donotsendwelcomeemail" id="donotsendwelcomeemail">
-                    <label for="donotsendwelcomeemail"><?php echo _l('client_do_not_send_welcome_email'); ?></label>
-                </div>
-                <?php } ?>
                 <?php if (total_rows(db_prefix() . 'notes', ['rel_type' => 'lead', 'rel_id' => $lead->id]) > 0) { ?>
                 <div class="checkbox checkbox-primary">
                     <input type="checkbox" name="transfer_notes" id="transfer_notes">
