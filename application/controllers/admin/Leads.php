@@ -380,11 +380,13 @@ class Leads extends AdminController
             $default_country  = get_option('customer_default_country');
             $data             = $this->input->post();
 
-            // A converted lead always gets the welcome email and the set-password
-            // email, so the customer can choose their own password. The form no
-            // longer posts a password or either checkbox; force the flags here so
-            // a crafted request cannot suppress the emails.
-            unset($data['password'], $data['donotsendwelcomeemail']);
+            // A converted lead gets ONE onboarding email: the branded "Welcome to
+            // TechPlex" set-password email (contact-set-password), which also carries
+            // the Video KYC link. The stock welcome email is suppressed so the customer
+            // is not sent two. The form no longer posts a password or either checkbox;
+            // force the flags here so a crafted request cannot change that.
+            unset($data['password']);
+            $data['donotsendwelcomeemail']   = 'on';
             $data['send_set_password_email'] = 'on';
 
             $original_lead_email = $data['original_lead_email'];

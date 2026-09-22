@@ -92,17 +92,82 @@ class Videokyc_model extends App_Model
         return $this;
     }
 
-    /** SQL predicate restricting a requests row (columns rel_type, rel_id, created_by) to the scope. */
-    private function requestScopeSql()
+    /**
+     * Employee KYC (rel_type = 'staff') follows different rules from customers:
+     *   - $actorId is the logged-in staff member; nobody ever reviews their own KYC.
+     *   - $employeeAll (admins, HR): every employee except themself.
+     *   - otherwise: only employees who report to $actorId (payplex_staff_profiles).
+     * With no actor (the public link, the customer portal) employee data is unreachable.
+     */
+    public $employeeAll = false;
+    public $actorId     = null;
+
+    public function scopeEmployees($all, $actorId)
     {
+        $this->employeeAll = (bool) $all;
+        $this->actorId     = $actorId === null ? null : (int) $actorId;
+        return $this;
+    }
+
+    /** SELECT of the staff ids that report to a manager, or a never-true one if that module is absent. */
+    private function reportsSql($managerId)
+    {
+        $p = db_prefix();
+        if (!$this->db->table_exists($p . 'payplex_staff_profiles')) {
+            return 'SELECT 0 WHERE 1 = 0';
+        }
+        return "SELECT staff_id FROM {$p}payplex_staff_profiles WHERE is_current = 1 AND reporting_manager_id = " . (int) $managerId;
+    }
+
+    /** Is this staff member someone the actor may see and review? */
+    public function employeeAccess($staffId)
+    {
+        if ($this->actorId === null || (int) $staffId === $this->actorId) {
+            return false;
+        }
+        if ($this->employeeAll) {
+            return true;
+        }
+        if (!$this->db->table_exists(db_prefix() . 'payplex_staff_profiles')) {
+            return false;
+        }
+        $rows = $this->db->query($this->reportsSql($this->actorId) . ' AND staff_id = ' . (int) $staffId)->num_rows();
+        return $rows > 0;
+    }
+
+    /** Does the actor manage anybody? Decides whether they get the Employee KYC page. */
+    public function managesAnyone($staffId)
+    {
+        return $this->db->table_exists(db_prefix() . 'payplex_staff_profiles')
+            && $this->db->query($this->reportsSql($staffId) . ' LIMIT 1')->num_rows() > 0;
+    }
+
+    /**
+     * SQL predicate restricting a requests row (columns rel_type, rel_id, created_by)
+     * to what the actor may see. $kind 'customer' = leads and customers, 'employee' = staff.
+     */
+    private function requestScopeSql($kind = 'customer')
+    {
+        if ($kind === 'employee') {
+            if ($this->actorId === null) {
+                return '(1 = 0)';
+            }
+            $a = (int) $this->actorId;
+            if ($this->employeeAll) {
+                return "(rel_type = 'staff' AND rel_id <> {$a})";
+            }
+            return "(rel_type = 'staff' AND rel_id <> {$a} AND rel_id IN (" . $this->reportsSql($a) . '))';
+        }
+
+        $types = "rel_type IN ('lead','customer')";
         if ($this->scopeStaff === null) {
-            return null;
+            return "({$types})";
         }
         $s = (int) $this->scopeStaff;
         $p = db_prefix();
-        return "(created_by = {$s}"
+        return "({$types} AND (created_by = {$s}"
             . " OR (rel_type = 'customer' AND rel_id IN (SELECT customer_id FROM {$p}customer_admins WHERE staff_id = {$s}))"
-            . " OR (rel_type = 'lead' AND rel_id IN (SELECT id FROM {$p}leads WHERE assigned = {$s} OR addedfrom = {$s})))";
+            . " OR (rel_type = 'lead' AND rel_id IN (SELECT id FROM {$p}leads WHERE assigned = {$s} OR addedfrom = {$s}))))";
     }
 
     /** May the scoped staff member touch this customer? */
@@ -118,6 +183,9 @@ class Videokyc_model extends App_Model
     /** May the scoped staff member touch this request row? */
     public function requestInScope($r)
     {
+        if ($r->rel_type === 'staff') {
+            return $this->employeeAccess($r->rel_id);   // employee KYC has its own rules
+        }
         if ($this->scopeStaff === null) {
             return true;
         }
@@ -179,7 +247,15 @@ class Videokyc_model extends App_Model
         if ($id <= 0) {
             return null;
         }
-        if ($type === 'lead') {
+        if ($type === 'staff') {
+            // An employee: only ones the actor may see (never themself).
+            if (!$this->employeeAccess($id)) {
+                return null;
+            }
+            $r = $this->db->select("staffid AS id, TRIM(CONCAT(firstname, ' ', lastname)) AS name, email, phonenumber AS phone", false)
+                ->where('staffid', $id)->where('active', 1)->where('is_not_staff', 0)
+                ->get(db_prefix() . 'staff')->row();
+        } elseif ($type === 'lead') {
             $this->db->select('id, name, email, phonenumber AS phone')->where('id', $id);
             if ($this->scopeStaff !== null) {
                 $this->db->group_start()->where('assigned', $this->scopeStaff)->or_where('addedfrom', $this->scopeStaff)->group_end();
@@ -299,6 +375,19 @@ class Videokyc_model extends App_Model
         return ($r && $this->requestInScope($r)) ? $r : null;
     }
 
+    /**
+     * Unscoped fetch by id, for system-internal callers that are not acting as
+     * any particular staff member — e.g. the hook that sends a brand-new
+     * employee their KYC link automatically on account creation. The employee
+     * scoping exists to stop one PERSON reviewing another's KYC; it has nothing
+     * to say about the system issuing a link on its own, and calling the scoped
+     * get() here would refuse every employee (no actor is ever "logged in").
+     */
+    public function getUnscoped($id)
+    {
+        return $this->db->where('id', (int) $id)->get($this->req)->row();
+    }
+
     /* ------------------------------------------------ identity documents (step 1) */
 
     const DOC_TYPES = [
@@ -402,8 +491,32 @@ class Videokyc_model extends App_Model
         if (!$r || $r->status === 'approved') {
             return false;
         }
+        return $this->reissueRow($r, $expiresAt);
+    }
+
+    /**
+     * Reissue MY OWN employee-KYC request (self-service "Continue Video KYC").
+     * Deliberately bypasses the scoped get()/employeeAccess(): that scoping
+     * exists to stop someone reviewing or managing ANOTHER person's KYC, and it
+     * refuses a staff member their own row for exactly that reason — which also
+     * broke reissue() here, since reissue() reads the row through get(). This
+     * is not review; it's the same act a customer's own "Continue" button
+     * performs, so it checks OWNERSHIP directly instead.
+     */
+    public function reissueOwnRequest($requestId, $staffId, $expiresAt)
+    {
+        $r = $this->db->where('id', (int) $requestId)->where('rel_type', 'staff')
+            ->where('rel_id', (int) $staffId)->get($this->req)->row();
+        if (!$r || $r->status === 'approved') {
+            return false;
+        }
+        return $this->reissueRow($r, $expiresAt);
+    }
+
+    private function reissueRow($r, $expiresAt)
+    {
         list($raw, $hash) = $this->newToken();
-        $this->db->where('id', (int) $id)->update($this->req, [
+        $this->db->where('id', (int) $r->id)->update($this->req, [
             'token_hash'      => $hash,
             'status'          => 'pending',
             'expires_at'      => $expiresAt,
@@ -522,13 +635,11 @@ class Videokyc_model extends App_Model
 
     /* ------------------------------------------------------- dashboard/lists */
 
-    public function stats()
+    public function stats($kind = 'customer')
     {
         $this->expireOverdue();
         $counts = array_fill_keys(self::STATUSES, 0);
-        if (($scope = $this->requestScopeSql()) !== null) {
-            $this->db->where($scope, null, false);
-        }
+        $this->db->where($this->requestScopeSql($kind), null, false);
         foreach ($this->db->select('status, COUNT(*) c', false)->group_by('status')->get($this->req)->result() as $r) {
             $counts[$r->status] = (int) $r->c;
         }
@@ -544,15 +655,13 @@ class Videokyc_model extends App_Model
     }
 
     /** @return array [rows, total] */
-    public function listRequests($status, $q, $page, $perPage, $customerId = 0)
+    public function listRequests($status, $q, $page, $perPage, $customerId = 0, $kind = 'customer')
     {
         $this->expireOverdue();
 
-        $scope = $this->requestScopeSql();
+        $scope = $this->requestScopeSql($kind);
         $apply = function () use ($status, $q, $scope, $customerId) {
-            if ($scope !== null) {
-                $this->db->where($scope, null, false);
-            }
+            $this->db->where($scope, null, false);
             if ($customerId > 0) {
                 $this->db->where('rel_type', 'customer')->where('rel_id', (int) $customerId);
             }
@@ -586,5 +695,91 @@ class Videokyc_model extends App_Model
             $r->channels = isset($byReq[$r->id]) ? $byReq[$r->id] : [];
         }
         return [$rows, $total];
+    }
+
+    /** The newest request for a subject (customer / lead / staff), or null. */
+    public function latestFor($type, $id)
+    {
+        return $this->db->where('rel_type', $type)->where('rel_id', (int) $id)
+            ->order_by('id', 'DESC')->limit(1)->get($this->req)->row();
+    }
+
+    /**
+     * A staff member's own latest employee-KYC request. Deliberately UNSCOPED:
+     * employeeAccess()/subject('staff', ...) refuse a staff member their own row
+     * on purpose (nobody reviews their own KYC), but checking your own STATUS is
+     * not reviewing — it is the same thing a customer does on their own portal
+     * page, and needs no permission.
+     */
+    public function myEmployeeRequest($staffId)
+    {
+        return $this->latestFor('staff', (int) $staffId);
+    }
+
+    /**
+     * Employees the actor may see, each with their latest employee-KYC request
+     * (status NULL = no request yet). Admins/HR: every active employee but
+     * themself; anyone else: only the employees who report to them.
+     */
+    public function employeeRows()
+    {
+        if ($this->actorId === null) {
+            return [];
+        }
+        $p = db_prefix();
+        $a = (int) $this->actorId;
+
+        $where = "s.active = 1 AND s.is_not_staff = 0 AND s.staffid <> {$a}";
+        if (!$this->employeeAll) {
+            if (!$this->db->table_exists($p . 'payplex_staff_profiles')) {
+                return [];
+            }
+            $where .= ' AND s.staffid IN (' . $this->reportsSql($a) . ')';
+        }
+        $this->expireOverdue();
+
+        return $this->db->query(
+            "SELECT s.staffid, TRIM(CONCAT(s.firstname, ' ', s.lastname)) AS name, s.email, s.phonenumber AS phone,
+                    r.id AS request_id, r.status AS request_status, r.submitted_at, r.expires_at
+               FROM {$p}staff s
+          LEFT JOIN {$this->req} r
+                 ON r.id = (SELECT MAX(x.id) FROM {$this->req} x WHERE x.rel_type = 'staff' AND x.rel_id = s.staffid)
+              WHERE {$where}
+           ORDER BY s.firstname, s.lastname"
+        )->result();
+    }
+
+    /* ------------------------------------------------- mandatory-KYC lock */
+
+    /**
+     * Was this account created AFTER the lock's cutoff date? Only accounts
+     * created from that point on are ever hard-locked to Dashboard + Video
+     * KYC — someone who already had full access before this feature existed
+     * never has it taken away. A missing cutoff (module not yet upgraded)
+     * means nobody is new, i.e. nobody is locked.
+     */
+    private function isAfterLockCutoff($createdAt)
+    {
+        $cutoff = get_option('payplex_videokyc_lock_cutoff');
+        if (!$cutoff || !$createdAt) {
+            return false;
+        }
+        return strtotime((string) $createdAt) > strtotime((string) $cutoff);
+    }
+
+    /** Is this CONTACT (customer login) a new account, per the cutoff above? */
+    public function isNewCustomerContact($contactId)
+    {
+        $c = $this->db->select('datecreated')->where('id', (int) $contactId)
+            ->get(db_prefix() . 'contacts')->row();
+        return $c ? $this->isAfterLockCutoff($c->datecreated) : false;
+    }
+
+    /** Is this STAFF member a new account, per the cutoff above? */
+    public function isNewStaffMember($staffId)
+    {
+        $s = $this->db->select('datecreated')->where('staffid', (int) $staffId)
+            ->get(db_prefix() . 'staff')->row();
+        return $s ? $this->isAfterLockCutoff($s->datecreated) : false;
     }
 }

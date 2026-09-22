@@ -7,7 +7,7 @@
 
   var K = window.KYC;
   var table = $('#kyc-table');
-  var state = { page: 1, perPage: parseInt(table.data('per-page'), 10) || 10, status: '', q: '', customerId: window.KYC.customerId || 0 };
+  var state = { page: 1, perPage: parseInt(table.data('per-page'), 10) || 10, status: '', q: '', customerId: window.KYC.customerId || 0, kind: window.KYC.kind || 'customer' };
   var chosen = null;          // subject picked in the generate modal
   var current = null;         // request open in the review modal
   var reviewIntent = null;
@@ -92,7 +92,7 @@
 
   function loadList() {
     var tbody = table.find('tbody');
-    $.getJSON(K.base + '/list_requests', { page: state.page, per_page: state.perPage, status: state.status, q: state.q, customer_id: state.customerId })
+    $.getJSON(K.base + '/list_requests', { page: state.page, per_page: state.perPage, status: state.status, q: state.q, customer_id: state.customerId, kind: state.kind })
       .done(function (r) {
         if (!r.rows.length) {
           tbody.html('<tr><td colspan="5" class="text-muted">No KYC requests found.</td></tr>');
@@ -357,7 +357,13 @@
     if (!window.confirm((decision === 'approve' ? 'Approve' : decision === 'reject' ? 'Reject' : 'Ask the customer to resubmit') + ' this KYC? This is recorded against your name.')) { return; }
     $('#kyc-approve, #kyc-reject, #kyc-resubmit').prop('disabled', true);
     $.post(K.base + '/review', data, null, 'json')
-      .done(function () { $('#kyc-review-modal').modal('hide'); toast('success', decision === 'resubmit' ? 'Customer asked to resubmit.' : 'KYC ' + (decision === 'approve' ? 'approved' : 'rejected') + '.'); refreshAll(); })
+      .done(function (r) {
+        $('#kyc-review-modal').modal('hide');
+        var msg = decision === 'resubmit' ? 'Asked to resubmit.' : 'KYC ' + (decision === 'approve' ? 'approved' : 'rejected') + '.';
+        if (r && r.redo) { msg += r.redo.ok ? ' A new link was sent to the employee.' : ' Could not send a new link automatically: ' + r.redo.reason; }
+        toast('success', msg);
+        refreshAll();
+      })
       .fail(function (xhr) { $('#kyc-review-msg').html('<div class="alert alert-danger">' + esc(fail(xhr)) + '</div>'); })
       .always(function () { $('#kyc-approve, #kyc-reject, #kyc-resubmit').prop('disabled', false); });
   }

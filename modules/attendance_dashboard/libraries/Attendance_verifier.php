@@ -22,14 +22,27 @@ class Attendance_verifier
         return is_numeric($lat) && is_numeric($lng) && abs($lat) <= 90 && abs($lng) <= 180 && !($lat == 0 && $lng == 0);
     }
 
-    /**
-     * @param array $s settings: early_minutes, late_grace_minutes, max_accuracy_m
-     * @return array [ok, reason, distance_m, is_late]
-     */
-    public static function evaluate($schedule, $workplace, $lat, $lng, $accuracy, $nowTs, array $s)
+    /** Date of the shift a check-in/out belongs to (an overnight shift's check-out after midnight belongs to yesterday). */
+    public static function shiftDate($schedule, $nowTs, $type)
     {
-        $fail = function ($reason, $d = null) {
-            return ['ok' => false, 'reason' => $reason, 'distance_m' => $d, 'is_late' => 0];
+        $overnight = strtotime('1970-01-01 ' . $schedule['end_time']) <= strtotime('1970-01-01 ' . $schedule['start_time']);
+        if ($type === 'out' && $overnight && date('H:i:s', $nowTs) < $schedule['end_time']) {
+            return date('Y-m-d', $nowTs - 86400);
+        }
+
+        return date('Y-m-d', $nowTs);
+    }
+
+    /**
+     * @param string $type 'in' | 'out'
+     * @param array  $s    settings: early_minutes, late_grace_minutes, max_accuracy_m, checkout_late_minutes
+     * @return array [ok, reason, distance_m, is_late, is_early_out, shift_date]
+     */
+    public static function evaluate($schedule, $workplace, $lat, $lng, $accuracy, $nowTs, array $s, $type = 'in')
+    {
+        $date = self::shiftDate($schedule, $nowTs, $type);
+        $fail = function ($reason, $d = null) use ($date) {
+            return ['ok' => false, 'reason' => $reason, 'distance_m' => $d, 'is_late' => 0, 'is_early_out' => 0, 'shift_date' => $date];
         };
 
         if (!self::validCoords($lat, $lng)) {
@@ -44,21 +57,47 @@ class Attendance_verifier
         }
 
         $days = array_filter(explode(',', (string) $schedule['working_days']), 'strlen');
-        if (!in_array(date('N', $nowTs), $days)) {
+        if (!in_array(date('N', strtotime($date)), $days)) {
             return $fail('Outside permitted attendance time (not a working day).', $dist);
         }
-        $date  = date('Y-m-d', $nowTs);
         $start = strtotime($date . ' ' . $schedule['start_time']);
         $end   = strtotime($date . ' ' . $schedule['end_time']);
         if ($end <= $start) {
             $end += 86400; // overnight shift
         }
+
+        $ok = ['ok' => true, 'distance_m' => $dist, 'is_late' => 0, 'is_early_out' => 0, 'shift_date' => $date];
+        if ($type === 'out') {
+            // Check-out is allowed from shift start until the configured time after shift end.
+            if ($nowTs < $start || $nowTs > $end + $s['checkout_late_minutes'] * 60) {
+                return $fail('Outside permitted attendance time.', $dist);
+            }
+            $early = $nowTs < $end - $s['late_grace_minutes'] * 60 ? 1 : 0;
+
+            return ['reason' => $early ? 'Check-out verified (left early).' : 'Check-out verified.', 'is_early_out' => $early] + $ok;
+        }
+
         if ($nowTs < $start - $s['early_minutes'] * 60 || $nowTs > $end) {
             return $fail('Outside permitted attendance time.', $dist);
         }
-
         $late = $nowTs > $start + $s['late_grace_minutes'] * 60 ? 1 : 0;
 
-        return ['ok' => true, 'reason' => $late ? 'Verified (late arrival).' : 'Verified.', 'distance_m' => $dist, 'is_late' => $late];
+        return ['reason' => $late ? 'Check-in verified (late arrival).' : 'Check-in verified.', 'is_late' => $late] + $ok;
+    }
+
+    /** Late / early-exit / overtime minutes for one shift. Any of $inTs/$outTs may be null. */
+    public static function metrics($schedule, $date, $inTs, $outTs, $graceMin)
+    {
+        $start = strtotime($date . ' ' . $schedule['start_time']);
+        $end   = strtotime($date . ' ' . $schedule['end_time']);
+        if ($end <= $start) {
+            $end += 86400;
+        }
+
+        return [
+            'late'  => ($inTs && $inTs > $start + $graceMin * 60) ? (int) round(($inTs - $start) / 60) : 0,
+            'early' => ($outTs && $outTs < $end - $graceMin * 60) ? (int) round(($end - $outTs) / 60) : 0,
+            'ot'    => ($outTs && $outTs > $end) ? (int) round(($outTs - $end) / 60) : 0,
+        ];
     }
 }

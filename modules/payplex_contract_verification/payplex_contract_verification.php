@@ -45,7 +45,6 @@ require_once __DIR__ . '/libraries/Contract_evidence_types.php';
 
 hooks()->add_action('admin_init', 'payplex_cv_capabilities');
 hooks()->add_action('admin_init', 'payplex_cv_menu');
-hooks()->add_action('admin_init', 'payplex_cv_customer_tab');
 
 /**
  * The eight capabilities, written out as a literal map.
@@ -118,35 +117,12 @@ function payplex_cv_capabilities()
     )), 'Contract Verification');
 }
 
-/**
- * The KYC & Video KYC tab on the customer profile.
- *
- * Registered only for somebody who holds `contract_kyc_view`. A tab that
- * appears for everyone and then shows an empty table has already told the
- * reader that this customer's verification data exists somewhere; not drawing
- * the tab at all is the quieter answer.
- *
- * Every guard is defensive. This runs inside the CRM's own bootstrap, and a
- * core upgrade that renames the tabs library must degrade to "no tab" rather
- * than to a fatal error on every admin page in the product.
+/*
+ * There is deliberately no standalone "KYC & Video KYC" customer-profile tab.
+ * The KYC cases render as the "KYC & Video KYC" sub-tab of the core Contracts
+ * tab (application/views/admin/clients/groups/contracts.php, ?group=contracts&sub=kyc),
+ * gated on `contract_kyc_view`, so the sidebar highlight never leaves Contracts.
  */
-function payplex_cv_customer_tab()
-{
-    if (!function_exists('get_instance'))            { return; }
-    if (!payplex_cv_can('contract_kyc_view'))        { return; }
-
-    $CI = &get_instance();
-
-    if (!isset($CI->app_tabs))                                              { return; }
-    if (!method_exists($CI->app_tabs, 'add_customer_profile_tab'))          { return; }
-
-    $CI->app_tabs->add_customer_profile_tab('payplex_cv_kyc', array(
-        'name'     => 'KYC & Video KYC',
-        'icon'     => 'fa fa-id-card-o',
-        'view'     => 'payplex_contract_verification/client_kyc_tab',
-        'position' => 60,
-    ));
-}
 
 function payplex_cv_can($cap)
 {

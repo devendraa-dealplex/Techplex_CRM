@@ -19,6 +19,8 @@ class Videokyc extends AdminController
         // Admins and holders of `view_all` see everything; everyone else (sales) is
         // limited to their own customers, leads and requests.
         $this->kyc->scopeTo($this->can('view_all') ? null : get_staff_user_id());
+        // Employee KYC has its own rules: admins/HR see all employees, managers their own reports.
+        $this->kyc->scopeEmployees($this->can('employee_all'), get_staff_user_id());
     }
 
     /* ------------------------------------------------------------ helpers */
@@ -103,6 +105,206 @@ class Videokyc extends AdminController
         $this->load->view('payplex_videokyc/dashboard', $data);
     }
 
+    /* ------------------------------------------------- my own employee KYC */
+
+    /**
+     * GET /admin/video-kyc/my — a staff member's OWN Video KYC status, exactly
+     * as a customer sees theirs on /clients/video-kyc. Open to every logged-in
+     * staff member: no capability check, because checking your own status is
+     * not reviewing anybody.
+     */
+    public function my()
+    {
+        $sid = (int) get_staff_user_id();
+        $req = $this->kyc->myEmployeeRequest($sid);
+
+        $reviewNote = '';
+        if ($req && in_array($req->status, ['approved', 'rejected', 'resubmit'], true)) {
+            $v = $this->kyc->latestVideo($req->id);
+            $reviewNote = $v ? (string) $v->review_notes : '';
+        }
+
+        $this->load->view('payplex_videokyc/my_kyc', [
+            'title'       => 'My Video KYC',
+            'req'         => $req,
+            'review_note' => $reviewNote,
+            'can_continue'=> $req && in_array($req->status, ['pending', 'in_progress'], true)
+                             && strtotime($req->expires_at) >= time(),
+        ]);
+    }
+
+    /**
+     * POST /admin/video-kyc/my_continue — reopen MY already-issued link. Never
+     * creates a new request: employee KYC requests are issued by HR/a manager
+     * (Employee KYC page), never self-started. This only re-delivers a link that
+     * already exists, for whenever the employee wants it, instead of making them
+     * wait on another email/SMS.
+     */
+    public function my_continue()
+    {
+        $this->postOnly();
+        $sid  = (int) get_staff_user_id();
+        $last = $this->kyc->myEmployeeRequest($sid);
+
+        if (!$last || !in_array($last->status, ['pending', 'in_progress'], true)
+            || strtotime($last->expires_at) < time()) {
+            set_alert('warning', 'There is no active Video KYC link to continue. Ask HR or your manager to send you one.');
+            redirect(admin_url('video-kyc/my'));
+        }
+
+        $hours   = (int) get_option('payplex_videokyc_link_ttl_hours') ?: 48;
+        $expires = date('Y-m-d H:i:s', time() + $hours * 3600);
+        $raw     = $this->kyc->reissueOwnRequest((int) $last->id, $sid, $expires);
+        if ($raw === false) {
+            set_alert('danger', 'This link cannot be reopened. Ask HR or your manager to send you a new one.');
+            redirect(admin_url('video-kyc/my'));
+        }
+
+        log_activity('Video KYC continued by employee #' . $sid . ' [request #' . (int) $last->id . ']');
+        redirect(Payplex_kyc_notifier::buildLink($raw));
+    }
+
+    /* ----------------------------------------------------- employee KYC */
+
+    /**
+     * Who gets the Employee KYC page: admins, HR (employee_all / employee_send) and
+     * anyone with employees reporting to them (payplex_staff reporting manager).
+     */
+    private function canEmployeeArea()
+    {
+        return $this->can('employee_all') || $this->can('employee_send')
+            || $this->kyc->managesAnyone(get_staff_user_id());
+    }
+
+    private function needEmployeeArea()
+    {
+        if (!$this->canEmployeeArea()) {
+            if ($this->input->is_ajax_request()) {
+                $this->json(['success' => false, 'message' => 'You do not have permission to do that.'], 403);
+                exit;
+            }
+            access_denied('payplex_videokyc');
+        }
+    }
+
+    /** GET /admin/video-kyc/employees — HR sends links; HR and managers review. */
+    public function employees()
+    {
+        $this->needEmployeeArea();
+        $data                = $this->viewData('Employee Video KYC');
+        $data['can']['review'] = true;    // whoever sees an employee's request may decide it (rules are in the model)
+        $data['can']['video']  = true;
+        $data['can_send']    = $this->can('employee_send');
+        $data['employees']   = $this->kyc->employeeRows();
+        $data['ttl_hours']   = (int) get_option('payplex_videokyc_link_ttl_hours') ?: 48;
+        $this->load->view('payplex_videokyc/employees', $data);
+    }
+
+    /**
+     * POST /admin/video-kyc/employee_send   staff_ids[], channels[] (default: email)
+     *
+     * HR/admin sends an employee their Video KYC link. An employee with a live
+     * pending link gets it re-issued (the old link dies); one already submitted or
+     * approved is skipped. Identity (name, email, phone) is read from the staff
+     * record here, never from the browser.
+     */
+    public function employee_send()
+    {
+        $this->postOnly();
+        $this->need('employee_send');
+
+        $ids = array_values(array_unique(array_filter(array_map('intval', (array) $this->input->post('staff_ids')))));
+        if (!$ids || count($ids) > 300) {
+            return $this->json(['success' => false, 'message' => 'Choose between 1 and 300 employees.'], 422);
+        }
+        $channels = array_values(array_intersect(Payplex_kyc_notifier::CHANNELS, (array) $this->input->post('channels')));
+        $channels = $channels ?: ['email'];
+
+        $tpl = $this->kyc->defaultTemplate();
+        if (!$tpl || !$tpl->active) {
+            return $this->json(['success' => false, 'message' => 'No active script template. Add one in Video KYC settings.'], 422);
+        }
+        $hours   = (int) get_option('payplex_videokyc_link_ttl_hours') ?: 48;
+        $expires = date('Y-m-d H:i:s', time() + $hours * 3600);
+        $lang    = Payplex_kyc_scripts::DEFAULT_LANG;
+        $notify  = new Payplex_kyc_notifier($this->kyc);
+
+        $sent = 0;
+        $skip = [];
+        foreach ($ids as $sid) {
+            $r = $this->issueEmployeeLink($sid, $channels, $tpl, $expires, $lang, $notify);
+            if ($r['ok']) {
+                $sent++;
+            } else {
+                $skip[] = $r['reason'];
+            }
+        }
+
+        $this->json(['success' => true, 'sent' => $sent, 'skipped' => $skip,
+            'message' => $sent . ' link(s) sent' . ($skip ? ', ' . count($skip) . ' skipped' : '') . '.']);
+    }
+
+    /**
+     * Issue (or reissue) and deliver ONE employee's Video KYC link. Shared by
+     * employee_send() (HR/a manager choosing who to send to) and review() (an
+     * automatic redo link the moment an employee's KYC is rejected or asked to
+     * be resubmitted — an employee cannot self-start, so leaving them with
+     * nothing to click would strand them with no way forward).
+     *
+     * @return array ['ok' => bool, 'name' => string|null, 'reason' => string|null]
+     *               reason is the skip/failure message; set only when ok is false.
+     */
+    private function issueEmployeeLink($staffId, array $channels, $tpl, $expires, $lang, Payplex_kyc_notifier $notify)
+    {
+        $subject = $this->kyc->subject('staff', (int) $staffId);
+        if (!$subject) {
+            return ['ok' => false, 'name' => null, 'reason' => 'Employee #' . (int) $staffId . ': not found or not yours to manage'];
+        }
+        $last = $this->kyc->latestFor('staff', (int) $staffId);
+        if ($last && $last->status === 'approved') {
+            return ['ok' => false, 'name' => $subject['name'], 'reason' => $subject['name'] . ': already approved'];
+        }
+        if ($last && $last->status === 'submitted') {
+            return ['ok' => false, 'name' => $subject['name'], 'reason' => $subject['name'] . ': video submitted, awaiting review'];
+        }
+
+        if ($last && in_array($last->status, ['pending', 'in_progress'], true) && strtotime($last->expires_at) >= time()) {
+            $raw = $this->kyc->reissue((int) $last->id, $expires);   // fresh link; the old one stops working
+            $rid = (int) $last->id;
+        } else {
+            list($raw, $hash) = $this->kyc->newToken();
+            $rid = $this->kyc->createRequest([
+                'token_hash'      => $hash,
+                'rel_type'        => 'staff',
+                'rel_id'          => $subject['id'],
+                'customer_name'   => $subject['name'],
+                'customer_email'  => $subject['email'],
+                'customer_phone'  => $subject['phone'],
+                'template_id'     => $tpl->id,
+                'dynamic_script'  => Videokyc_model::renderScript($tpl, $subject['name'], $lang),
+                'script_language' => $lang,
+                'expires_at'      => $expires,
+                'created_by'      => get_staff_user_id(),
+            ]);
+        }
+        if ($raw === false || !$rid) {
+            return ['ok' => false, 'name' => $subject['name'], 'reason' => $subject['name'] . ': could not issue a link'];
+        }
+
+        $req     = $this->kyc->get($rid);
+        $results = $notify->dispatch($req, $raw, $channels);
+        $ok      = false;
+        foreach ($results as $r) {
+            $ok = $ok || $r['status'] === 'sent';
+        }
+        log_activity('Employee Video KYC link issued [employee #' . (int) $staffId . ', request #' . $rid . ']');
+
+        return $ok
+            ? ['ok' => true, 'name' => $subject['name'], 'reason' => null]
+            : ['ok' => false, 'name' => $subject['name'],
+               'reason' => $subject['name'] . ': link created but not delivered (' . $this->summarise($results) . ')'];
+    }
+
     /* --------------------------------------------------------------- JSON */
 
     /** GET /admin/video-kyc/stats — metric cards. */
@@ -115,7 +317,8 @@ class Videokyc extends AdminController
     /** GET /admin/video-kyc/list?status=&q=&page=&per_page= */
     public function list_requests()
     {
-        $this->need('view');
+        $kind = $this->input->get('kind') === 'employee' ? 'employee' : 'customer';
+        $kind === 'employee' ? $this->needEmployeeArea() : $this->need('view');
         $per  = min(100, max(5, (int) $this->input->get('per_page') ?: 10));
         $page = max(1, (int) $this->input->get('page'));
         list($rows, $total) = $this->kyc->listRequests(
@@ -123,7 +326,8 @@ class Videokyc extends AdminController
             trim((string) $this->input->get('q')),
             $page,
             $per,
-            (int) $this->input->get('customer_id')
+            (int) $this->input->get('customer_id'),
+            $kind
         );
         $this->json(['success' => true, 'rows' => $rows, 'total' => $total, 'page' => $page, 'per_page' => $per]);
     }
@@ -131,10 +335,15 @@ class Videokyc extends AdminController
     /** GET /admin/video-kyc/detail/<id> — everything the review modal needs. */
     public function detail($id = 0)
     {
-        $this->need('view');
+        // Out-of-scope requests (including other people's employee KYC) read as "not found".
         $r = $this->kyc->get((int) $id);
         if (!$r) {
             return $this->json(['success' => false, 'message' => 'Request not found.'], 404);
+        }
+        // Customer/lead requests need the Video KYC "view" capability; an employee's
+        // request is governed by who they report to (already enforced by get()).
+        if ($r->rel_type !== 'staff') {
+            $this->need('view');
         }
         $v = $this->kyc->latestVideo($r->id);
         $out = [
@@ -154,7 +363,7 @@ class Videokyc extends AdminController
                 'sha256' => $v->sha256, 'uploaded_at' => $v->created_at, 'uploaded_ip' => $v->uploaded_ip,
                 'user_agent' => $v->user_agent, 'verified_by' => $reviewer, 'verified_at' => $v->verified_at,
                 'review_notes' => $v->review_notes, 'checklist' => $v->checklist_json ? json_decode($v->checklist_json, true) : null,
-                'url' => $this->can('video_access') ? admin_url('video-kyc/video/' . $v->id) : null,
+                'url' => ($r->rel_type === 'staff' || $this->can('video_access')) ? admin_url('video-kyc/video/' . $v->id) : null,
             ];
         }
         $this->json(['success' => true, 'request' => $out]);
@@ -207,11 +416,17 @@ class Videokyc extends AdminController
     public function review()
     {
         $this->postOnly();
-        $this->need('review');
 
-        $id       = (int) $this->input->post('request_id');
-        if (!$this->kyc->get($id)) {
+        $id  = (int) $this->input->post('request_id');
+        $req = $this->kyc->get($id);
+        if (!$req) {
             return $this->json(['success' => false, 'message' => 'Request not found.'], 404);
+        }
+        // Customers/leads: the `review` capability. Employees: admins, HR and the
+        // employee's reporting manager (never the employee themself); get() above
+        // already refused anyone else.
+        if ($req->rel_type !== 'staff') {
+            $this->need('review');
         }
         $decision = $this->input->post('decision');
         $notes    = trim((string) $this->input->post('notes'));
@@ -237,7 +452,30 @@ class Videokyc extends AdminController
         }
         $final = ['approve' => 'approved', 'reject' => 'rejected', 'resubmit' => 'resubmit'][$decision];
         log_activity('Video KYC ' . $final . ' [request #' . $id . ']');
-        $this->json(['success' => true, 'status' => $final]);
+
+        /*
+         * Employees cannot self-start (the customer's own "record again" button
+         * does not exist here — HR/the manager issues the link). So the moment an
+         * employee's KYC is rejected or sent back for resubmission, a fresh link
+         * is issued and delivered automatically, right here, rather than leaving
+         * them stuck until someone remembers to go back to Employee KYC and
+         * resend by hand. A failure here never fails the review decision itself.
+         */
+        $redo = null;
+        if ($req->rel_type === 'staff' && in_array($decision, ['reject', 'resubmit'], true)) {
+            $tpl = $this->kyc->defaultTemplate();
+            if ($tpl && $tpl->active) {
+                $hours   = (int) get_option('payplex_videokyc_link_ttl_hours') ?: 48;
+                $expires = date('Y-m-d H:i:s', time() + $hours * 3600);
+                $notify  = new Payplex_kyc_notifier($this->kyc);
+                $redo    = $this->issueEmployeeLink((int) $req->rel_id, Payplex_kyc_notifier::CHANNELS,
+                    $tpl, $expires, Payplex_kyc_scripts::DEFAULT_LANG, $notify);
+            } else {
+                $redo = ['ok' => false, 'reason' => 'No active script template, so a new link could not be sent automatically.'];
+            }
+        }
+
+        $this->json(['success' => true, 'status' => $final, 'redo' => $redo]);
     }
 
     /**
@@ -246,10 +484,13 @@ class Videokyc extends AdminController
      */
     public function video($videoId = 0)
     {
-        $this->need('video_access');
-        $v = $this->kyc->video((int) $videoId);
-        if (!$v || !$this->kyc->get($v->request_id)) {
+        $v   = $this->kyc->video((int) $videoId);
+        $req = $v ? $this->kyc->get($v->request_id) : null;
+        if (!$v || !$req) {
             show_404();
+        }
+        if ($req->rel_type !== 'staff') {
+            $this->need('video_access');   // employees' videos follow the reporting-line rule in get()
         }
         $base = realpath(FCPATH . 'uploads/payplex_videokyc');
         $path = realpath($base . DIRECTORY_SEPARATOR . $v->storage_path);

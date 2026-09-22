@@ -9,6 +9,7 @@ $CI->db->query("CREATE TABLE IF NOT EXISTS `{$p}att_workplaces` (
   `id` INT AUTO_INCREMENT PRIMARY KEY,
   `name` VARCHAR(150) NOT NULL,
   `address` VARCHAR(255) NULL,
+  `pincode` VARCHAR(12) NULL,
   `latitude` DECIMAL(10,7) NOT NULL,
   `longitude` DECIMAL(10,7) NOT NULL,
   `radius_m` INT NOT NULL DEFAULT 100,
@@ -18,6 +19,7 @@ $CI->db->query("CREATE TABLE IF NOT EXISTS `{$p}att_workplaces` (
 
 $CI->db->query("CREATE TABLE IF NOT EXISTS `{$p}att_employees` (
   `id` INT AUTO_INCREMENT PRIMARY KEY,
+  `staff_id` INT NULL,
   `emp_code` VARCHAR(50) NOT NULL,
   `full_name` VARCHAR(150) NOT NULL,
   `role` VARCHAR(100) NULL,
@@ -31,6 +33,7 @@ $CI->db->query("CREATE TABLE IF NOT EXISTS `{$p}att_employees` (
   `created_at` DATETIME NOT NULL,
   `updated_at` DATETIME NOT NULL,
   UNIQUE KEY `emp_code` (`emp_code`),
+  UNIQUE KEY `staff_id` (`staff_id`),
   KEY `workplace_id` (`workplace_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET={$cs};");
 
@@ -53,6 +56,7 @@ $CI->db->query("CREATE TABLE IF NOT EXISTS `{$p}att_records` (
   `employee_id` INT NOT NULL,
   `workplace_id` INT NOT NULL,
   `att_date` DATE NOT NULL,
+  `att_type` VARCHAR(3) NOT NULL DEFAULT 'in',
   `timestamp` DATETIME NOT NULL,
   `latitude` DECIMAL(10,7) NULL,
   `longitude` DECIMAL(10,7) NULL,
@@ -63,10 +67,14 @@ $CI->db->query("CREATE TABLE IF NOT EXISTS `{$p}att_records` (
   `verification_status` VARCHAR(10) NOT NULL,
   `verification_reason` VARCHAR(255) NOT NULL,
   `is_late` TINYINT(1) NOT NULL DEFAULT 0,
+  `is_early_out` TINYINT(1) NOT NULL DEFAULT 0,
   `unique_key` TINYINT(1) NULL,
   `ip_address` VARCHAR(45) NULL,
   `marked_by` INT NOT NULL DEFAULT 0,
   `created_at` DATETIME NOT NULL,
+  `edited_by` INT NULL,
+  `edited_at` DATETIME NULL,
+  `edit_note` VARCHAR(255) NULL,
   UNIQUE KEY `one_per_day` (`employee_id`, `att_date`, `unique_key`),
   KEY `att_date` (`att_date`),
   KEY `workplace_id` (`workplace_id`),
@@ -82,7 +90,7 @@ if (!is_dir($uploads)) {
 @file_put_contents($uploads . 'index.html', '');
 @file_put_contents($uploads . 'web.config', '<?xml version="1.0"?><configuration><system.webServer><authorization><deny users="*"/></authorization></system.webServer></configuration>');
 
-$defaults = ['att_allow_duplicate' => '0', 'att_early_minutes' => '30', 'att_late_grace_minutes' => '10', 'att_max_accuracy_m' => '100'];
+$defaults = ['att_allow_duplicate' => '0', 'att_early_minutes' => '30', 'att_late_grace_minutes' => '10', 'att_max_accuracy_m' => '100', 'att_checkout_late_minutes' => '240'];
 foreach ($defaults as $k => $v) {
     if (get_option($k) === '') {
         add_option($k, $v);

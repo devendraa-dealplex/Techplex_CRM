@@ -242,16 +242,87 @@ if ($statusCol && strpos((string) $statusCol->Type, "'resubmit'") === false) {
     $CI->db->query("ALTER TABLE `{$reqTable}` MODIFY `status` ENUM('pending','in_progress','submitted','approved','rejected','resubmit','expired') NOT NULL DEFAULT 'pending'");
 }
 
-/* 9. The customer's welcome / set-password email gets a Video KYC paragraph.
- * The {video_kyc_url} merge field is registered in payplex_videokyc.php. Add-only:
- * templates that already mention it (or that an admin emptied) are not touched. */
+/* 9. The onboarding email a converted lead receives (set password + Video KYC).
+ * The branded layout lives in assets/onboarding_email.html and replaces the stock
+ * English "contact-set-password" template. The marker comment at its top makes this
+ * run once: after that the template is the admin's to edit in Setup > Email
+ * Templates. Merge fields used: {contact_firstname} {contact_lastname}
+ * {set_password_url} {logo_image_with_url} and {video_kyc_url} (registered in
+ * payplex_videokyc.php). */
 $tplMail = $prefix . 'emailtemplates';
-if ($CI->db->table_exists($tplMail)) {
-    $para = '<p><strong>Complete your KYC:</strong> after you set your password and log in, upload your identity document (whenever you like) '
-          . 'and record a short verification video here: <a href="{video_kyc_url}">{video_kyc_url}</a></p>';
-    $CI->db->query(
-        "UPDATE `{$tplMail}` SET `message` = CONCAT(`message`, ?) WHERE `slug` = 'contact-set-password' AND `type` = 'client' "
-        . "AND `language` = 'english' AND `message` <> '' AND `message` NOT LIKE '%video_kyc_url%'",
-        [$para]
-    );
+$html    = @file_get_contents(__DIR__ . '/assets/onboarding_email.html');
+if ($html && $CI->db->table_exists($tplMail)) {
+    $CI->db->where('slug', 'contact-set-password')->where('type', 'client')->where('language', 'english')
+        ->not_like('message', 'payplex-onboarding-email')
+        ->update($tplMail, [
+            'subject'   => 'Welcome to TechPlex! Set your password and complete your KYC',
+            'message'   => $html,
+            'plaintext' => 0,
+        ]);
+}
+
+/* 10. Employee KYC: requests.rel_type gains 'staff' (an employee, verified via a link
+ * HR sends). Guarded by the column type, so it only alters the table once. */
+$relCol = $CI->db->query("SHOW COLUMNS FROM `{$reqTable}` LIKE 'rel_type'")->row();
+if ($relCol && strpos((string) $relCol->Type, "'staff'") === false) {
+    $CI->db->query("ALTER TABLE `{$reqTable}` MODIFY `rel_type` ENUM('lead','customer','staff') NOT NULL");
+}
+
+/* 11. HR role: may see, review and send links for ALL employees. Same two-place grant
+ * (role template + each staff member's own permissions) and same add-only rule as
+ * step 7. Managers need no permission: they review their own reports by relationship. */
+$hrCaps = ['employee_all', 'employee_send'];
+foreach ($CI->db->where('name', 'HR')->get($prefix . 'roles')->result() as $role) {
+    $perms = @unserialize($role->permissions);
+    if (!is_array($perms)) {
+        continue;
+    }
+    if (!isset($perms['payplex_videokyc'])) {
+        $perms['payplex_videokyc'] = $hrCaps;
+        $CI->db->where('roleid', $role->roleid)->update($prefix . 'roles', ['permissions' => serialize($perms)]);
+    }
+    $caps = array_values(array_intersect((array) $perms['payplex_videokyc'], $hrCaps));
+    foreach ($CI->db->select('staffid')->where('role', $role->roleid)->where('admin', 0)->get($prefix . 'staff')->result() as $m) {
+        $has = $CI->db->where('staff_id', $m->staffid)->where('feature', 'payplex_videokyc')
+            ->where_in('capability', $hrCaps)->count_all_results($prefix . 'staff_permissions');
+        if ($has > 0) {
+            continue;
+        }
+        foreach ($hrCaps as $cap) {
+            $CI->db->insert($prefix . 'staff_permissions', ['staff_id' => $m->staffid, 'feature' => 'payplex_videokyc', 'capability' => $cap]);
+        }
+    }
+}
+
+/* 12. Admin-type ROLES ("Super Admin", "CRM Admin"): staff who hold these roles but are
+ * not flagged as administrators get every Video KYC capability, including sending
+ * employee links. (Staff flagged as administrators already pass every check.)
+ * Add-only per capability, so anything an admin ticks by hand is kept, and a
+ * capability is never granted twice. */
+$adminCaps = ['view', 'view_all', 'generate', 'review', 'video_access', 'documents', 'settings', 'employee_all', 'employee_send'];
+foreach ($CI->db->where_in('name', ['Super Admin', 'CRM Admin'])->get($prefix . 'roles')->result() as $role) {
+    $perms = @unserialize($role->permissions);
+    if (!is_array($perms)) {
+        continue;
+    }
+    $perms['payplex_videokyc'] = array_values(array_unique(array_merge((array) (isset($perms['payplex_videokyc']) ? $perms['payplex_videokyc'] : []), $adminCaps)));
+    $CI->db->where('roleid', $role->roleid)->update($prefix . 'roles', ['permissions' => serialize($perms)]);
+
+    foreach ($CI->db->select('staffid')->where('role', $role->roleid)->get($prefix . 'staff')->result() as $m) {
+        foreach ($adminCaps as $cap) {
+            $exists = $CI->db->where('staff_id', $m->staffid)->where('feature', 'payplex_videokyc')->where('capability', $cap)
+                ->count_all_results($prefix . 'staff_permissions');
+            if (!$exists) {
+                $CI->db->insert($prefix . 'staff_permissions', ['staff_id' => $m->staffid, 'feature' => 'payplex_videokyc', 'capability' => $cap]);
+            }
+        }
+    }
+}
+
+/* 13. The "must complete KYC before using the account" lock (customers AND
+ * employees) applies only to accounts created from this point on — never
+ * retroactively to someone who already had full access. This single option
+ * records that boundary, set once and never moved. */
+if (get_option('payplex_videokyc_lock_cutoff') === false || get_option('payplex_videokyc_lock_cutoff') === '') {
+    add_option('payplex_videokyc_lock_cutoff', date('Y-m-d H:i:s'));
 }

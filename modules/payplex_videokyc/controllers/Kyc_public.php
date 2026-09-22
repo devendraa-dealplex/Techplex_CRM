@@ -83,6 +83,7 @@ class Kyc_public extends App_Controller
             case 'approved':
                 return $this->json(['valid' => false, 'reason' => 'already_submitted'], 409);
             case 'rejected':
+            case 'resubmit':
                 return $this->json(['valid' => false, 'reason' => 'rejected'], 409);
         }
         if ((int) $req->upload_attempts >= $maxAttempts) {
@@ -99,6 +100,8 @@ class Kyc_public extends App_Controller
             'script'        => $req->dynamic_script,
             'expires_at'    => $req->expires_at,
             'attempts_left' => $maxAttempts - (int) $req->upload_attempts,
+            // Where "Back to home" goes: employees return to the staff area, customers to their portal.
+            'home_url'      => $req->rel_type === 'staff' ? admin_url() : site_url('clients/video-kyc'),
             'limits'        => [
                 'min_sec' => (int) get_option('payplex_videokyc_min_record_sec') ?: 5,
                 'max_sec' => (int) get_option('payplex_videokyc_max_record_sec') ?: 90,

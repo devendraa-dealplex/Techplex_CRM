@@ -61,6 +61,7 @@
       .then(function (j) {
         if (!j.valid) { return fatal(j.reason); }
         limits = j.limits || limits;
+        if (j.home_url && $('btn-home')) { $('btn-home').setAttribute('href', j.home_url); }   // employees go to the staff area
         applyLang(j.language);
         $('in-hello').textContent = t('hello', { name: j.customer_name });
         $('in-intro').textContent = t('intro', { company: j.company || C.company });

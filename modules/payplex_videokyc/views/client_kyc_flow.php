@@ -16,6 +16,7 @@ $s1     = $flow_state['step1'];
 $s2     = $flow_state['step2'];
 $s2Text = ['locked' => 'Waiting for documents', 'ready' => 'Waiting for the customer to record', 'in_progress' => 'In progress / awaiting review', 'completed' => 'Approved'];
 $s2Text['ready'] = in_array($flow_state['request_status'], ['rejected', 'resubmit'], true) ? 'Waiting for the customer to record again' : $s2Text['ready'];
+if ($flow_state['request_status'] === 'pending') { $s2Text['in_progress'] = 'Pending: waiting for the customer to record'; }elseif ($flow_state['request_status'] === 'in_progress') { $s2Text['in_progress'] = 'Customer is recording'; }elseif ($flow_state['request_status'] === 'submitted') { $s2Text['in_progress'] = 'Video submitted: awaiting your review'; }
 ?>
 <div class="kyc-flow" id="kyc-flow" data-customer-id="<?php echo (int) $flow_customer['id']; ?>">
 

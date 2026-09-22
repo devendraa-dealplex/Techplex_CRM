@@ -23,7 +23,7 @@ $dayNames = [1 => 'Mon', 2 => 'Tue', 3 => 'Wed', 4 => 'Thu', 5 => 'Fri', 6 => 'S
                 <td><?= html_escape($e['emp_code']); ?></td>
                 <td><?= html_escape($e['full_name']); ?><div class="text-muted"><small><?= html_escape($e['phone']); ?></small></div></td>
                 <td><?= html_escape($e['role']); ?><div class="text-muted"><small><?= html_escape($e['department']); ?></small></div></td>
-                <td><?= html_escape($e['workplace_name']); ?></td>
+                <td><?= $e['workplace_name'] ? html_escape($e['workplace_name']) : '<span class="label label-warning">Not assigned</span>'; ?></td>
                 <td><?= substr($e['start_time'], 0, 5) . '-' . substr($e['end_time'], 0, 5); ?>
                     <div class="text-muted"><small><?= implode(',', array_map(function ($d) use ($dayNames) { return $dayNames[$d] ?? ''; }, explode(',', (string) $e['working_days']))); ?></small></div></td>
                 <td><span class="label label-<?= $e['active'] ? 'success' : 'default'; ?>"><?= $e['active'] ? 'Active' : 'Inactive'; ?></span></td>

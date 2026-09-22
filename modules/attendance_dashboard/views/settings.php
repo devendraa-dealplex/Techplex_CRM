@@ -7,10 +7,12 @@
             <input type="number" min="0" max="240" name="early_minutes" class="form-control" value="<?= (int) $s['early_minutes']; ?>"></div>
         <div class="form-group"><label>Grace minutes after start before "late"</label>
             <input type="number" min="0" max="120" name="late_grace_minutes" class="form-control" value="<?= (int) $s['late_grace_minutes']; ?>"></div>
+        <div class="form-group"><label>Minutes after shift end that check-out stays open</label>
+            <input type="number" min="0" max="1440" name="checkout_late_minutes" class="form-control" value="<?= (int) $s['checkout_late_minutes']; ?>"></div>
         <div class="form-group"><label>Maximum GPS error accepted (metres)</label>
             <input type="number" min="10" max="1000" name="max_accuracy_m" class="form-control" value="<?= (int) $s['max_accuracy_m']; ?>"></div>
         <div class="checkbox checkbox-primary"><input type="checkbox" id="dup" name="allow_duplicate" value="1" <?= $s['allow_duplicate'] ? 'checked' : ''; ?>>
-            <label for="dup">Allow more than one verified attendance per employee per day</label></div>
+            <label for="dup">Allow more than one verified check-in / check-out per employee per day</label></div>
         <button class="btn btn-primary">Save</button>
         <?= form_close(); ?>
     </div></div>

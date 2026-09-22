@@ -44,7 +44,7 @@ $cvTypes = Contract_evidence_types::catalogue();
 <?php echo payplex_cv_responsive_table_assets(); ?>
 <div class="cv-exec">
 
-  <h4 class="no-mtop">KYC &amp; Video KYC</h4>
+  <h4 class="no-mtop">KYC Cases</h4>
 
   <?php if (empty($cvCases)) { ?>
     <p class="text-muted">
