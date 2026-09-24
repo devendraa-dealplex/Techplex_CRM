@@ -1,0 +1,59 @@
+/* Payplex Video KYC — staff UI. Scoped with the kyc- prefix; no global overrides. */
+.kyc-head { display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:15px; }
+.kyc-title { color:#12507F; font-weight:600; }
+.kyc-title .fa { margin-right:6px; }
+
+/* metric cards */
+.kyc-metrics { margin-bottom:5px; }
+.kyc-card { background:#fff; border:1px solid #e4e9ef; border-left:4px solid #94a3b8; border-radius:4px; padding:14px 16px; margin-bottom:15px; }
+.kyc-card-label { font-size:12px; text-transform:uppercase; letter-spacing:.04em; color:#64748b; }
+.kyc-card-value { font-size:30px; font-weight:700; line-height:1.2; color:#0f172a; }
+.kyc-card-sub { font-size:12px; color:#94a3b8; }
+.kyc-card-total    { border-left-color:#0d6efd; }
+.kyc-card-pending  { border-left-color:#f59e0b; }
+.kyc-card-approved { border-left-color:#16a34a; }
+.kyc-card-rejected { border-left-color:#dc2626; }
+
+/* table */
+.kyc-toolbar { display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:10px; }
+.kyc-filters { display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
+.kyc-filters .form-control { width:auto; min-width:160px; }
+.kyc-table td { vertical-align:middle !important; }
+.kyc-actions .btn { margin-left:2px; }
+.kyc-pager { margin-top:8px; text-align:right; }
+.kyc-ch { font-size:16px; margin-right:4px; }
+.kyc-ch-sent { color:#16a34a; } .kyc-ch-failed { color:#dc2626; }
+.kyc-ch-skipped { color:#f59e0b; } .kyc-ch-none { color:#cbd5e1; }
+
+/* generate modal */
+.kyc-subject-results { max-height:180px; overflow:auto; border:1px solid #e4e9ef; border-radius:3px; margin-top:4px; }
+.kyc-subject-results:empty { display:none; }
+.kyc-sr { display:block; padding:6px 10px; border-bottom:1px solid #f1f5f9; }
+.kyc-sr:hover { background:#f1f5f9; text-decoration:none; }
+.kyc-sr-empty { padding:8px 10px; color:#94a3b8; }
+.kyc-subject-chosen { margin-top:6px; padding:8px 10px; background:#eef6ff; border:1px solid #cfe2ff; border-radius:3px; }
+.kyc-script-preview { padding:10px 12px; background:#f8fafc; border:1px dashed #cbd5e1; border-radius:3px; font-style:italic; }
+.kyc-presets { font-size:12px; margin-top:3px; }
+.kyc-result-list { margin:6px 0 0 18px; padding:0; }
+
+/* review modal */
+.kyc-video-wrap video { width:100%; max-height:420px; background:#000; border-radius:4px; }
+.kyc-novideo { background:#f1f5f9; color:#64748b; text-align:center; padding:60px 10px; border-radius:4px; }
+.kyc-novideo .fa { font-size:28px; margin-bottom:6px; }
+.kyc-video-meta { margin-top:6px; }
+.kyc-sec { margin:14px 0 6px; font-weight:600; color:#12507F; }
+.kyc-sec:first-child { margin-top:0; }
+.kyc-dl { margin:0; } .kyc-dl dt { float:left; clear:left; width:80px; color:#64748b; font-weight:400; }
+.kyc-dl dd { margin-left:90px; }
+.kyc-script { font-size:13px; padding:8px 12px; margin:0; border-left:3px solid #0d6efd; background:#f8fafc; }
+#kyc-checklist label { display:block; font-weight:400; margin-bottom:4px; cursor:pointer; }
+.kyc-intent-approve #kyc-checklist { outline:2px solid #bbf7d0; outline-offset:4px; }
+.kyc-intent-reject #kyc-notes { border-color:#dc2626; }
+.kyc-log { list-style:none; padding:0; margin:0; font-size:12px; }
+.kyc-log li { padding:2px 0; }
+
+/* language support */
+.kyc-script-preview, .kyc-script, #tpl-body-hi, #tpl-body-mr { font-family: "Segoe UI", "Noto Sans Devanagari", "Nirmala UI", Mangal, sans-serif; }
+.kyc-script-preview[lang="hi"], .kyc-script-preview[lang="mr"] { font-style:normal; font-size:15px; line-height:1.7; }
+.kyc-lang-tag { margin-left:4px; font-weight:400; }
+.kyc-lang-note { font-size:12px; margin-top:4px; }

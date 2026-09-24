@@ -134,11 +134,26 @@ class Aicalling extends AdminController
         if (!$this->input->is_ajax_request()) {
             ajax_access_denied();
         }
-        echo json_encode($this->placeCall((int) $leadId, array(
+
+        $leadId = (int) $leadId;
+        if ($leadId <= 0) {
+            echo json_encode(['success' => false, 'code' => 'invalid_lead',
+                'message' => 'No lead was specified for this call.']);
+            return;
+        }
+
+        $objective = trim((string) $this->input->post('objective'));
+        if ($objective === '') {
+            echo json_encode(['success' => false, 'code' => 'objective_required',
+                'message' => 'A call script/objective is required before a call can be placed.']);
+            return;
+        }
+
+        echo json_encode($this->placeCall($leadId, array(
             'schedule_at' => $this->input->post('schedule_at') ?: null,
             'agent_id'    => $this->input->post('agent_id'),
             'language'    => $this->input->post('language') ?: 'en-IN',
-            'objective'   => $this->input->post('objective'),
+            'objective'   => $objective,
         )));
     }
 

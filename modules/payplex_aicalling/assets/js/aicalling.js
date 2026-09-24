@@ -13,6 +13,15 @@
     el.html('<div class="pp-alert ' + (type === 'ok' ? 'ok' : 'err') + '">' + msg + '</div>');
   }
 
+  // 10 digits, starting 6-9, after stripping spaces/hyphens/parens and an
+  // optional leading 0, +91 or 91 trunk prefix. Mirrors the server-side
+  // check in Payplex_call_limits::isIndianMobile() — kept in sync deliberately
+  // so a rejection here is never a surprise once it reaches the server.
+  function isIndianMobile(v) {
+    var digits = String(v || '').replace(/\D+/g, '').replace(/^(?:0|91)(?=\d{10}$)/, '');
+    return /^[6-9]\d{9}$/.test(digits);
+  }
+
   // Health check on the dashboard.
   $(document).on('click', '#pp-health-btn', function () {
     var btn = $(this).prop('disabled', true).text('Checking…');
@@ -44,12 +53,28 @@
     var leadId = panel.data('lead');
     var mode = form.data('mode');
     var result = form.find('.pp-call-result');
+    var objective = $.trim(form.find('.pp-objective').val());
+
+    if (!leadId || leadId <= 0) {
+      alert('No lead is selected for this call.');
+      return;
+    }
+    if (!objective) {
+      alert('Please enter a call script/objective before placing the call.');
+      return;
+    }
+    if (!isIndianMobile(panel.data('phone'))) {
+      alert('This lead does not have a valid Indian mobile number (10 digits, starting with 6-9). '
+        + 'Update the lead\'s phone number before calling.');
+      return;
+    }
+
     var btn = $(this).prop('disabled', true).text('Placing…');
 
     var data = $.extend({
       agent_id: form.find('.pp-agent').val(),
       language: form.find('.pp-language').val(),
-      objective: form.find('.pp-objective').val(),
+      objective: objective,
       schedule_at: mode === 'schedule' ? form.find('.pp-schedule-at').val() : ''
     }, csrf());
 

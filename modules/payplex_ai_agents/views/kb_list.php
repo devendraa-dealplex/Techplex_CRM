@@ -20,6 +20,9 @@
           <button class="btn btn-info btn-sm" type="submit">Ask</button>
           <span class="text-muted" style="font-size:11px;margin-left:6px" id="kb-ask-counter">0 / <?php echo (int) Knowledge::ASK_QUERY_MAX_LENGTH; ?></span>
         <?php echo form_close(); ?>
+        <div id="kb-ask-result" class="panel_s" style="display:none;margin-top:10px;border-left:4px solid #ddd">
+          <div class="panel-body" id="kb-ask-result-body"></div>
+        </div>
       </div></div>
 
       <div class="table-responsive"><table class="table table-striped table-bordered">
