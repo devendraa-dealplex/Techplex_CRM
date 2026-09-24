@@ -221,3 +221,76 @@ function count_trash_contracts($staffId = null)
 
     return total_rows(db_prefix() . 'contracts', array_merge(['trash' => 1], $where_own));
 }
+
+/**
+ * Format the contract internal reference number
+ * Available as soon as the contract is created, since it's derived
+ * from the auto-increment id rather than a separate running counter
+ *
+ * @param  integer|object $id Contract id, or the contract row itself
+ *
+ * @return string
+ */
+function format_contract_number($id)
+{
+    $id = is_object($id) ? $id->id : $id;
+
+    return get_option('contract_number_prefix') . str_pad($id, get_option('number_padding_prefixes'), '0', STR_PAD_LEFT);
+}
+
+/**
+ * Upload a document from $_FILES and attach it to a contract
+ *
+ * @param  integer $id         Contract id
+ * @param  string  $index_name $_FILES index to read the uploaded file from
+ *
+ * @return object|false The newly created file row, or false when nothing was uploaded/upload failed
+ */
+function handle_contract_document_field($id, $index_name)
+{
+    if (!isset($_FILES[$index_name]) || $_FILES[$index_name]['name'] == '') {
+        return false;
+    }
+
+    if (_perfex_upload_error($_FILES[$index_name]['error'])) {
+        return false;
+    }
+
+    $tmpFilePath = $_FILES[$index_name]['tmp_name'];
+    if (empty($tmpFilePath)) {
+        return false;
+    }
+
+    $path = get_upload_path_by_type('contract') . $id . '/';
+    _maybe_create_upload_path($path);
+    $filename    = unique_filename($path, $_FILES[$index_name]['name']);
+    $newFilePath = $path . $filename;
+
+    if (!move_uploaded_file($tmpFilePath, $newFilePath)) {
+        return false;
+    }
+
+    $CI      = & get_instance();
+    $file_id = $CI->misc_model->add_attachment_to_database($id, 'contract', [[
+        'file_name' => $filename,
+        'filetype'  => $_FILES[$index_name]['type'],
+    ]]);
+
+    return $file_id ? $CI->misc_model->get_file($file_id) : false;
+}
+
+/**
+ * Build the HTML link used to reference an uploaded document
+ * from a contract field (description/content) that would
+ * otherwise contain manually typed text
+ *
+ * @param  object $file Row from the files table
+ *
+ * @return string
+ */
+function contract_document_field_link($file)
+{
+    return '<a href="' . site_url('download/file/contract/' . $file->attachment_key) . '" target="_blank">'
+        . '<i class="fa-solid fa-paperclip"></i> ' . e($file->file_name)
+        . '</a>';
+}

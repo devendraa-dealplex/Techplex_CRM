@@ -46,7 +46,7 @@ class Contract_signing_settings
     {
         return array(
             'enabled' => array(
-                'label' => 'Enable Leegality', 'type' => 'bool', 'secret' => false,
+                'label' => 'Enable (unused -- native signing does not read this)', 'type' => 'bool', 'secret' => false,
                 'default' => 0,
                 'means' => 'Off by default. Turning it on does not make the integration live: '
                          . 'the environment setting does that, and it has its own gate.',

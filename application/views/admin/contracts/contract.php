@@ -16,6 +16,9 @@
                     <span>
                         <?= isset($contract) ? e($contract->subject) : _l('contract_information') ?>
                     </span>
+                    <?php if (isset($contract)) { ?>
+                    <small class="text-muted"><?= e(format_contract_number($contract->id)); ?></small>
+                    <?php } ?>
 
                     <?php if (isset($contract) && $contract->trash > 0) { ?>
                     <div class="label label-danger">
@@ -124,6 +127,25 @@
                 <?php } ?>
             </div>
             <?php if (isset($contract)) { ?>
+            <?php
+                /* A module (e.g. payplex_contract_verification) may contribute extra
+                   stages after Create -- typically Invite and Finalize, each a link to
+                   its own screen. Empty by default, so an install without such a module
+                   renders exactly as before: no stage row at all. */
+                $extra_stages = hooks()->apply_filters('contract_workflow_stages', [], $contract);
+            ?>
+            <?php if (!empty($extra_stages)) { ?>
+            <div class="mbot15">
+                <span class="label label-primary">1 <?= _l('contract_information'); ?></span>
+                <?php foreach ($extra_stages as $stage) { ?>
+                <span>&raquo;</span>
+                <a href="<?= e($stage['url']); ?>" class="label label-default">
+                    <?= e($stage['label']); ?>
+                </a>
+                <?php } ?>
+            </div>
+            <?php } ?>
+            <?php hooks()->do_action('after_contract_workflow_stages', $contract); ?>
             <div class="horizontal-scrollable-tabs">
                 <div class="scroller arrow-left"><i class="fa fa-angle-left"></i></div>
                 <div class="scroller arrow-right"><i class="fa fa-angle-right"></i></div>
@@ -133,65 +155,6 @@
                             class="<?= ! $this->input->get('tab') ? 'active' : ''; ?>">
                             <a href="#tab_info" aria-controls="tab_info" role="tab" data-toggle="tab">
                                 <?= _l('contract_information'); ?>
-                            </a>
-                        </li>
-                        <li role="presentation"
-                            class="<?= $this->input->get('tab') == 'tab_content' ? 'active' : ''; ?>">
-                            <a href="#tab_content" aria-controls="tab_content" role="tab" data-toggle="tab">
-                                <?= _l('contract_content'); ?>
-                            </a>
-                        </li>
-                        <li role="presentation"
-                            class="<?= $this->input->get('tab') == 'attachments' ? 'active' : ''; ?>">
-                            <a href="#attachments" aria-controls="attachments" role="tab" data-toggle="tab">
-                                <?= _l('contract_attachments'); ?>
-                                <?php if ($totalAttachments = count($contract->attachments)) { ?>
-                                <span class="badge attachments-indicator">
-                                    <?= e($totalAttachments); ?>
-                                </span>
-                                <?php } ?>
-                            </a>
-                        </li>
-                        <li role="presentation">
-                            <a href="#tab_comments" aria-controls="tab_comments" role="tab" data-toggle="tab"
-                                onclick="get_contract_comments(); return false;">
-                                <?= _l('contract_comments'); ?>
-                                <?php $totalComments = total_rows(db_prefix() . 'contract_comments', 'contract_id=' . $contract->id); ?>
-                                <span
-                                    class="badge comments-indicator<?= $totalComments == 0 ? ' hide' : ''; ?>">
-                                    <?= e($totalComments); ?>
-                                </span>
-                            </a>
-                        </li>
-                        <li role="presentation"
-                            class="<?= $this->input->get('tab') == 'renewals' ? 'active' : ''; ?>">
-                            <a href="#renewals" aria-controls="renewals" role="tab" data-toggle="tab">
-                                <?= _l('no_contract_renewals_history_heading'); ?>
-                                <?php if ($totalRenewals = count($contract_renewal_history)) { ?>
-                                <span class="badge">
-                                    <?= e($totalRenewals); ?>
-                                </span>
-                                <?php } ?>
-                            </a>
-                        </li>
-                        <li role="presentation">
-                            <a href="#tab_tasks" aria-controls="tab_tasks" role="tab" data-toggle="tab"
-                                onclick="init_rel_tasks_table(<?= e($contract->id); ?>,'contract'); return false;">
-                                <?= _l('tasks'); ?>
-                            </a>
-                        </li>
-                        <li role="presentation">
-                            <a href="#tab_notes"
-                                onclick="get_sales_notes(<?= e($contract->id); ?>,'contracts'); return false"
-                                aria-controls="tab_notes" role="tab" data-toggle="tab">
-                                <?= _l('contract_notes'); ?>
-                                <span class="notes-total">
-                                    <?php if ($totalNotes > 0) { ?>
-                                    <span class="badge">
-                                        <?= e($totalNotes); ?>
-                                    </span>
-                                    <?php } ?>
-                                </span>
                             </a>
                         </li>
                         <li role="presentation">
@@ -234,7 +197,7 @@
                             class="tab-pane<?= ! $this->input->get('tab') ? ' active' : ''; ?>"
                             id="tab_info">
 
-                            <?= form_open($this->uri->uri_string(), ['id' => 'contract-form']); ?>
+                            <?= form_open($this->uri->uri_string(), ['id' => 'contract-form', 'enctype' => 'multipart/form-data']); ?>
                             <div class="form-group">
                                 <div class="checkbox checkbox-primary no-mtop checkbox-inline">
                                     <input type="checkbox" id="trash" name="trash"
@@ -334,8 +297,13 @@ if (is_admin() || get_option('staff_members_create_inline_contract_types') == '1
                                     ); ?>
                                 </div>
                             </div>
-                            <?php $value = (isset($contract) ? $contract->description : ''); ?>
-                            <?= render_textarea('description', 'contract_description', $value, ['rows' => 6]); ?>
+                            <div class="form-group">
+                                <label class="control-label"><?= _l('contract_description'); ?></label>
+                            </div>
+                            <div id="description-document-wrapper" class="form-group">
+                                <input type="file" name="description_document" class="form-control">
+                                <p class="text-muted no-mbot"><?= _l('contract_document_replace_text_hint'); ?></p>
+                            </div>
                             <?php $rel_id = (isset($contract) ? $contract->id : false); ?>
                             <?= render_custom_fields('contracts', $rel_id); ?>
 
@@ -348,234 +316,6 @@ if (is_admin() || get_option('staff_members_create_inline_contract_types') == '1
 
                         </div>
                         <?php if (isset($contract)) { ?>
-                        <div role="tabpanel"
-                            class="tab-pane<?= $this->input->get('tab') == 'tab_content' ? ' active' : ''; ?>"
-                            id="tab_content">
-                            <?php if ($contract->signed == 1) { ?>
-                            <div class="alert alert-success">
-                                <?= _l(
-                                    'document_signed_info',
-                                    [
-                                        '<b>' . e($contract->acceptance_firstname) . ' ' . e($contract->acceptance_lastname) . '</b> (<a href="mailto:' . e($contract->acceptance_email) . '" class="alert-link">' . e($contract->acceptance_email) . '</a>)',
-                                        '<b>' . e(_dt($contract->acceptance_date)) . '</b>',
-                                        '<b>' . e($contract->acceptance_ip) . '</b>', ]
-                                ); ?>
-                            </div>
-                            <?php } elseif ($contract->marked_as_signed == 1) { ?>
-                            <div class="alert alert-info">
-                                <?= _l('contract_marked_as_signed_info'); ?>
-                            </div>
-                            <?php } ?>
-                            <?php if (isset($contract_merge_fields)) { ?>
-                            <p class="bold text-right no-mbot"><a href="#"
-                                    onclick="slideToggle('.avilable_merge_fields'); return false;">
-                                    <?= _l('available_merge_fields'); ?>
-                                </a>
-                            </p>
-                            <div class="avilable_merge_fields mtop15 hide">
-                                <ul class="list-group">
-                                    <?php foreach ($contract_merge_fields as $field) {?>
-                                    <?php foreach ($field as $f) { ?>
-                                    <li class="list-group-item">
-                                        <b><?= $f['name']; ?></b>
-                                        <a href="#" class="pull-right" onclick="insert_merge_field(this); return false">
-                                            <?= $f['key']; ?></a>
-                                    </li>
-                                    <?php } ?>
-                                    <?php } ?>
-                                </ul>
-                            </div>
-                            <?php } ?>
-
-                            <hr class="hr-panel-separator" />
-                            <?php if (staff_cant('edit', 'contracts')) { ?>
-                            <div class="alert alert-warning contract-edit-permissions">
-                                <?= _l('contract_content_permission_edit_warning'); ?>
-                            </div>
-                            <?php } ?>
-                            <div class="tc-content<?= staff_can('edit', 'contracts') && ! $isSignedOrMarkedSigned ? ' editable' : ''; ?>"
-                                style="border:1px solid #d2d2d2;min-height:70px; border-radius:4px;">
-                                <?php if (empty($contract->content) && staff_can('edit', 'contracts')) { ?>
-                                <?= hooks()->apply_filters('new_contract_default_content', '<span class="text-danger text-uppercase mtop15 editor-add-content-notice"> ' . _l('click_to_add_content') . '</span>') ?>
-                                <?php } else { ?>
-                                <?= $contract->content; ?>
-                                <?php } ?>
-                            </div>
-                            <?php if (! empty($contract->signature)) { ?>
-                            <div class="row mtop25">
-                                <div class="col-md-6 col-md-offset-6 text-right">
-                                    <div class="bold">
-                                        <p class="no-mbot">
-                                            <?= e(_l('contract_signed_by') . ": {$contract->acceptance_firstname} {$contract->acceptance_lastname}"); ?>
-                                        </p>
-                                        <p class="no-mbot">
-                                            <?= e(_l('contract_signed_date') . ': ' . _dt($contract->acceptance_date)); ?>
-                                        </p>
-                                        <p class="no-mbot">
-                                            <?= e(_l('contract_signed_ip') . ": {$contract->acceptance_ip}"); ?>
-                                        </p>
-                                    </div>
-                                    <p class="bold">
-                                        <?= _l('document_customer_signature_text'); ?>
-                                        <?php if ($contract->signed == 1 && staff_can('delete', 'contracts')) { ?>
-                                        <a href="<?= admin_url('contracts/clear_signature/' . $contract->id); ?>"
-                                            data-toggle="tooltip"
-                                            title="<?= _l('clear_signature'); ?>"
-                                            class="_delete text-danger">
-                                            <i class="fa fa-remove"></i>
-                                        </a>
-                                        <?php } ?>
-                                    </p>
-                                    <div class="pull-right">
-                                        <img src="<?= site_url('download/preview_image?path=' . protected_file_url_by_path(get_upload_path_by_type('contract') . $contract->id . '/' . $contract->signature)); ?>"
-                                            class="img-responsive" alt="">
-                                    </div>
-                                </div>
-                            </div>
-                            <?php } ?>
-                        </div>
-                        <div role="tabpanel"
-                            class="tab-pane<?= $this->input->get('tab') == 'attachments' ? ' active' : ''; ?>"
-                            id="attachments">
-                            <?= form_open(admin_url('contracts/add_contract_attachment/' . $contract->id), ['id' => 'contract-attachments-form', 'class' => 'dropzone mtop15']); ?>
-                            <?= form_close(); ?>
-                            <div class="tw-flex tw-justify-end tw-items-center tw-space-x-2 mtop15">
-                                <button class="gpicker" data-on-pick="contractGoogleDriveSave">
-                                    <i class="fa-brands fa-google" aria-hidden="true"></i>
-                                    <?= _l('choose_from_google_drive'); ?>
-                                </button>
-                                <div id="dropbox-chooser"></div>
-                            </div>
-                            <!-- <img src="https://drive.google.com/uc?id=14mZI6xBjf-KjZzVuQe8-rjtv_wXEbDTw" /> -->
-
-                            <div id="contract_attachments" class="mtop30">
-                                <?php
-            $data = '<div class="row">';
-
-                            foreach ($contract->attachments as $attachment) {
-                                $href_url = site_url('download/file/contract/' . $attachment['attachment_key']);
-                                if (! empty($attachment['external'])) {
-                                    $href_url = $attachment['external_link'];
-                                }
-                                $data .= '<div class="display-block contract-attachment-wrapper">';
-                                $data .= '<div class="col-md-10">';
-                                $data .= '<div class="pull-left"><i class="' . get_mime_class($attachment['filetype']) . '"></i></div>';
-                                $data .= '<a href="' . $href_url . '"' . (! empty($attachment['external']) ? ' target="_blank"' : '') . '>' . $attachment['file_name'] . '</a>';
-                                $data .= '<p class="text-muted">' . $attachment['filetype'] . '</p>';
-                                $data .= '</div>';
-                                $data .= '<div class="col-md-2 text-right">';
-                                if ($attachment['staffid'] == get_staff_user_id() || is_admin()) {
-                                    $data .= '<a href="#" class="text-muted" onclick="delete_contract_attachment(this,' . $attachment['id'] . '); return false;"><i class="fa-regular fa-trash-can"></i></a>';
-                                }
-                                $data .= '</div>';
-                                $data .= '<div class="clearfix"></div><hr/>';
-                                $data .= '</div>';
-                            }
-                            $data .= '</div>';
-                            echo $data;
-                            ?>
-                            </div>
-                        </div>
-                        <div role="tabpanel"
-                            class="tab-pane<?= $this->input->get('tab') == 'tab_comments' ? ' active' : ''; ?>"
-                            id="tab_comments">
-                            <div class="contract-comments">
-                                <div id="contract-comments"></div>
-                                <div class="clearfix"></div>
-                                <textarea name="content" id="comment" rows="4"
-                                    class="form-control mtop15 contract-comment"></textarea>
-                                <button type="button" class="btn btn-primary mtop10 pull-right"
-                                    onclick="add_contract_comment();"><?= _l('proposal_add_comment'); ?></button>
-                            </div>
-                        </div>
-                        <div role="tabpanel"
-                            class="tab-pane<?= $this->input->get('tab') == 'renewals' ? ' active' : ''; ?>"
-                            id="renewals">
-                            <?php if (staff_can('edit', 'contracts')) { ?>
-                            <div class="_buttons">
-                                <a href="#" class="btn btn-primary" data-toggle="modal"
-                                    data-target="#renew_contract_modal">
-                                    <i class="fa fa-refresh"></i>
-                                    <?= _l('contract_renew_heading'); ?>
-                                </a>
-                            </div>
-                            <hr />
-                            <?php } ?>
-
-                            <div class="clearfix"></div>
-
-                            <?php if (count($contract_renewal_history) == 0) {
-                                echo '<p class="tw-m-0 tw-text-base tw-font-medium tw-text-neutral-500">' . _l('no_contract_renewals_found') . '</p>';
-                            } ?>
-
-                            <?php foreach ($contract_renewal_history as $renewal) { ?>
-                            <div class="display-block">
-                                <div class="media-body">
-                                    <div class="display-block">
-                                        <b>
-                                            <?= e(_l('contract_renewed_by', $renewal['renewed_by'])); ?>
-                                        </b>
-                                        <?php if ($renewal['renewed_by_staff_id'] == get_staff_user_id() || is_admin()) { ?>
-                                        <a href="<?= admin_url('contracts/delete_renewal/' . $renewal['id'] . '/' . $renewal['contractid']); ?>"
-                                            class="pull-right _delete text-muted">
-                                            <i class="fa-regular fa-trash-can"></i>
-                                        </a>
-                                        <br />
-                                        <?php } ?>
-                                        <small
-                                            class="text-muted"><?= e(_dt($renewal['date_renewed'])); ?></small>
-                                        <hr class="hr-10" />
-                                        <span class="text-success bold" data-toggle="tooltip"
-                                            title="<?= e(_l('contract_renewal_old_start_date', _d($renewal['old_start_date']))); ?>">
-                                            <?= e(_l('contract_renewal_new_start_date', _d($renewal['new_start_date']))); ?>
-                                        </span>
-                                        <br />
-                                        <?php if (is_date($renewal['new_end_date'])) {
-                                            $tooltip = '';
-                                            if (is_date($renewal['old_end_date'])) {
-                                                $tooltip = e(_l('contract_renewal_old_end_date', _d($renewal['old_end_date'])));
-                                            } ?>
-                                        <span class="text-success bold" data-toggle="tooltip"
-                                            title="<?= e($tooltip); ?>">
-                                            <?= e(_l('contract_renewal_new_end_date', _d($renewal['new_end_date']))); ?>
-                                        </span>
-                                        <br />
-                                        <?php } ?>
-                                        <?php if ($renewal['new_value'] > 0) {
-                                            $contract_renewal_value_tooltip = '';
-                                            if ($renewal['old_value'] > 0) {
-                                                $contract_renewal_value_tooltip = ' data-toggle="tooltip" data-title="' . e(_l('contract_renewal_old_value', app_format_money($renewal['old_value'], $base_currency))) . '"';
-                                            } ?>
-                                        <span class="text-success bold"
-                                            <?= e($contract_renewal_value_tooltip); ?>>
-                                            <?= e(_l('contract_renewal_new_value', app_format_money($renewal['new_value'], $base_currency))); ?>
-                                        </span>
-                                        <br />
-                                        <?php } ?>
-                                    </div>
-                                </div>
-                                <hr />
-                            </div>
-                            <?php } ?>
-                        </div>
-                        <div role="tabpanel"
-                            class="tab-pane<?= $this->input->get('tab') == 'tab_tasks' ? ' active' : ''; ?>"
-                            id="tab_tasks">
-                            <?php init_relation_tasks_table(['data-new-rel-id' => $contract->id, 'data-new-rel-type' => 'contract']); ?>
-                        </div>
-                        <div role="tabpanel"
-                            class="tab-pane<?= $this->input->get('tab') == 'tab_notes' ? ' active' : ''; ?>"
-                            id="tab_notes">
-                            <?= form_open(admin_url('contracts/add_note/' . $contract->id), ['id' => 'sales-notes', 'class' => 'contract-notes-form mtop15']); ?>
-                            <?= render_textarea('description'); ?>
-                            <div class="text-right">
-                                <button type="submit"
-                                    class="btn btn-primary mtop15 mbot15"><?= _l('contract_add_note'); ?></button>
-                            </div>
-                            <?= form_close(); ?>
-                            <hr />
-                            <div class="mtop20" id="sales_notes_area"></div>
-                        </div>
                         <div role="tabpanel"
                             class="tab-pane<?= $this->input->get('tab') == 'tab_templates' ? ' active' : ''; ?>"
                             id="tab_templates">
@@ -662,6 +402,29 @@ if (is_admin() || get_option('staff_members_create_inline_contract_types') == '1
         init_tinymce_inline_editor({
             saveUsing: save_contract_content,
         })
+
+        $('#content_document_upload_btn').on('click', function() {
+            var input = document.getElementById('content_document');
+            if (!input.files.length) {
+                return;
+            }
+            var formData = new FormData();
+            formData.append('file', input.files[0]);
+            $.ajax({
+                url: admin_url + 'contracts/upload_content_document/' + contract_id,
+                type: 'POST',
+                data: formData,
+                contentType: false,
+                processData: false,
+            }).done(function(response) {
+                response = JSON.parse(response);
+                if (response.success) {
+                    window.location.href = window.location.href.split('?')[0] + '?tab=tab_content';
+                } else {
+                    alert_float('danger', response.message);
+                }
+            });
+        });
     });
 
     function save_contract_content(manual) {

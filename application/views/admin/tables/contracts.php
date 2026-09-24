@@ -71,7 +71,7 @@ return App_table::find('contracts')
             @$this->ci->db->query('SET SQL_BIG_SELECTS=1');
         }
 
-        $result = data_tables_init($aColumns, $sIndexColumn, $sTable, $join, $where, [db_prefix() . 'contracts.id', 'trash', 'client', 'hash', 'marked_as_signed', 'project_id']);
+        $result = data_tables_init($aColumns, $sIndexColumn, $sTable, $join, $where, [db_prefix() . 'contracts.id', 'trash', 'client', 'hash', 'marked_as_signed', 'signed', 'project_id']);
 
         $output  = $result['output'];
         $rResult = $result['rResult'];
@@ -79,7 +79,7 @@ return App_table::find('contracts')
         foreach ($rResult as $aRow) {
             $row = [];
 
-            $row[] = $aRow['id'];
+            $row[] = format_contract_number($aRow['id']);
 
             $subjectOutput = '<a href="' . admin_url('contracts/contract/' . $aRow['id']) . '"' . ($projectId ? ' target="_blank"' : '') . ' class="tw-truncate tw-max-w-xs tw-block tw-w-full tw-font-medium" title="' . e($aRow['subject']) . '">' . e($aRow['subject']) . '</a>';
 
@@ -116,7 +116,7 @@ return App_table::find('contracts')
 
             if ($aRow['marked_as_signed'] == 1) {
                 $row[] = '<span class="text-success tw-font-medium">' . _l('marked_as_signed') . '</span>';
-            } elseif (! empty($aRow['signature'])) {
+            } elseif (! empty($aRow['signature']) || $aRow['signed'] == 1) {
                 $row[] = '<span class="text-success tw-font-medium">' . _l('is_signed') . '</span>';
             } else {
                 $row[] = '<span class="text-muted tw-font-medium">' . _l('is_not_signed') . '</span>';
@@ -127,7 +127,7 @@ return App_table::find('contracts')
                 $row[] = (strpos($customFieldColumn, 'date_picker_') !== false ? _d($aRow[$customFieldColumn]) : $aRow[$customFieldColumn]);
             }
             $row['DT_RowClass'] = 'has-border-left';
-            if (! empty($aRow['dateend']) && $aRow['marked_as_signed'] == 0 && empty($aRow['signature'])) {
+            if (! empty($aRow['dateend']) && $aRow['marked_as_signed'] == 0 && empty($aRow['signature']) && $aRow['signed'] != 1) {
                 $_date_end = date('Y-m-d', strtotime($aRow['dateend']));
                 if ($_date_end < date('Y-m-d')) {
                     $row['DT_RowClass'] .= ' row-border-danger';

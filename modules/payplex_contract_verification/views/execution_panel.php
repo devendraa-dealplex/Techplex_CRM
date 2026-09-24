@@ -1,7 +1,7 @@
 <?php defined('BASEPATH') or exit('No direct script access allowed'); ?>
 <?php
 /**
- * Execution & Video KYC panel.
+ * Execution panel.
  *
  * WHAT THIS SCREEN IS FOR
  * -----------------------
@@ -71,13 +71,6 @@
         </div>
       <?php } ?>
 
-      <?php if (empty($kyc_provider['implemented'])) { ?>
-        <div class="alert alert-warning">
-          <strong>Video KYC is not available.</strong>
-          <?php echo html_escape((string) $kyc_provider['detail']); ?>
-        </div>
-      <?php } ?>
-
       <?php /* ---- the workflow this contract is bound to ---- */ ?>
       <h5>Signing workflow</h5>
       <?php if (empty($profile)) { ?>
@@ -101,8 +94,6 @@
                   </span>
                 <?php } ?>
               </td></tr>
-          <tr><td>Video KYC policy</td>
-              <td><?php echo html_escape((string) $profile['kyc_policy']); ?></td></tr>
           <tr><td>Validated</td>
               <td>
                 <?php if (empty($profile['validated_at'])) { ?>
@@ -161,7 +152,7 @@
       <table class="table table-condensed">
         <thead><tr>
           <th>#</th><th>Name</th><th>Role</th><th>Invitation</th>
-          <th>Authentication</th><th>Signature</th><th>Video KYC</th>
+          <th>Authentication</th><th>Signature</th>
         </tr></thead>
         <tbody>
         <?php foreach ($signer_rows as $row) { ?>
@@ -175,47 +166,11 @@
             <td><?php echo html_escape((string) $row['invitation_label']); ?></td>
             <td><?php echo html_escape((string) $row['auth_label']); ?></td>
             <td><?php echo html_escape((string) $row['signature_label']); ?></td>
-            <td>
-              <?php echo html_escape((string) $row['kyc_label']); ?>
-              <?php if (!empty($row['kyc_reject_reason'])) { ?>
-                <div class="text-muted small">
-                  <?php echo html_escape((string) $row['kyc_reject_reason']); ?>
-                </div>
-              <?php } ?>
-            </td>
           </tr>
         <?php } ?>
         </tbody>
       </table>
       </div><p class="cv-swipe">Swipe to view more</p></div>
-
-      <?php /* ---- KYC delivery. Masked, and no link anywhere. ---- */ ?>
-      <?php if (!empty($deliveries)) { ?>
-        <h5>Verification invitations sent</h5>
-        <p class="text-muted small">
-          The link itself is not shown. It is single-use and stored only as a hash, so it cannot be
-          recovered by anyone &mdash; including an administrator. Resending issues a new link and
-          revokes the previous one.
-        </p>
-        <div class="cv-tablewrap"><div class="table-responsive">
-        <table class="table table-condensed">
-          <thead><tr>
-            <th>When</th><th>Channel</th><th>To</th><th>Result</th><th>Expires</th>
-          </tr></thead>
-          <tbody>
-          <?php foreach ($deliveries as $row) { ?>
-            <tr>
-              <td><?php echo html_escape((string) $row['queued_on']); ?></td>
-              <td><?php echo html_escape((string) $row['channel']); ?></td>
-              <td><?php echo html_escape((string) $row['recipient_masked']); ?></td>
-              <td><?php echo html_escape((string) $row['status_label']); ?></td>
-              <td><?php echo html_escape((string) $row['expires_on']); ?></td>
-            </tr>
-          <?php } ?>
-          </tbody>
-        </table>
-        </div><p class="cv-swipe">Swipe to view more</p></div>
-      <?php } ?>
 
       <?php /* ---- unresolved failures ---- */ ?>
       <?php if (!empty($failures)) { ?>
@@ -301,10 +256,6 @@
            href="<?php echo admin_url('payplex_contract_verification/signing/profile_map'); ?>">
           Workflow mapping
         </a>
-        <a class="btn btn-default btn-sm"
-           href="<?php echo admin_url('payplex_contract_verification/signing/kyc_config'); ?>">
-          Video KYC configuration
-        </a>
       <?php } ?>
 
       <?php if (!empty($can_send) && !empty($may_prepare)) { ?>
@@ -352,79 +303,6 @@
                                       . (int) $contract['id']); ?>">
           Failures &amp; retries
         </a>
-      <?php } ?>
-
-      <?php /* ---- Video KYC, per session ---- */ ?>
-      <?php if (!empty($kyc_sessions)) { ?>
-        <h5 class="mtop20">Video KYC sessions</h5>
-        <div class="cv-tablewrap"><div class="table-responsive">
-        <table class="table table-condensed">
-          <thead><tr><th>Signer</th><th>Attempt</th><th>Status</th><th>Actions</th></tr></thead>
-          <tbody>
-          <?php foreach ($kyc_sessions as $session) { ?>
-            <tr>
-              <td><?php echo html_escape((string) $session['signer_masked']); ?></td>
-              <td><?php echo html_escape((string) $session['attempt']); ?></td>
-              <td><?php echo html_escape((string) $session['state_label']); ?></td>
-              <td>
-                <?php if (!empty($can_kyc_review) && !empty($session['may_invite'])) { ?>
-                  <?php echo form_open(admin_url('payplex_contract_verification/signing/kyc_invite/'
-                                                 . (int) $contract['id']), array('class' => 'dinline')); ?>
-                    <input type="hidden" name="kyc_session_id"
-                           value="<?php echo (int) $session['id']; ?>">
-                    <input type="hidden" name="channel" value="email">
-                    <button type="submit" class="btn btn-default btn-xs" data-cv-once="1">
-                      Send KYC link
-                    </button>
-                  <?php echo form_close(); ?>
-                <?php } ?>
-
-                <?php if (!empty($can_kyc_retry) && !empty($session['may_retry'])) { ?>
-                  <?php echo form_open(admin_url('payplex_contract_verification/signing/kyc_retry/'
-                                                 . (int) $contract['id']), array('class' => 'dinline')); ?>
-                    <input type="hidden" name="kyc_session_id"
-                           value="<?php echo (int) $session['id']; ?>">
-                    <input type="hidden" name="reason" value="staff requested another attempt">
-                    <button type="submit" class="btn btn-default btn-xs" data-cv-once="1">Retry</button>
-                  <?php echo form_close(); ?>
-                <?php } ?>
-
-                <?php if (!empty($can_kyc_review) && !empty($session['may_review'])) { ?>
-                  <?php echo form_open(admin_url('payplex_contract_verification/signing/kyc_manual_review/'
-                                                 . (int) $contract['id']), array('class' => 'dinline')); ?>
-                    <input type="hidden" name="kyc_session_id"
-                           value="<?php echo (int) $session['id']; ?>">
-                    <input type="hidden" name="reason" value="referred by staff">
-                    <button type="submit" class="btn btn-default btn-xs" data-cv-once="1">
-                      Refer for review
-                    </button>
-                  <?php echo form_close(); ?>
-                <?php } ?>
-              </td>
-            </tr>
-          <?php } ?>
-          </tbody>
-        </table>
-        </div><p class="cv-swipe">Swipe to view more</p></div>
-      <?php } ?>
-
-      <?php if (!empty($can_kyc_review) && !empty($may_create_kyc_session)) { ?>
-        <?php echo form_open(admin_url('payplex_contract_verification/signing/kyc_session/'
-                                       . (int) $contract['id']), array('class' => 'mtop15')); ?>
-          <div class="form-group">
-            <label for="cv_kyc_signer">Open a Video KYC session for</label>
-            <select name="signer_id" id="cv_kyc_signer" class="form-control">
-              <?php foreach ($kyc_candidates as $candidate) { ?>
-                <option value="<?php echo (int) $candidate['id']; ?>">
-                  <?php echo html_escape((string) $candidate['label']); ?>
-                </option>
-              <?php } ?>
-            </select>
-          </div>
-          <button type="submit" class="btn btn-default btn-sm" data-cv-once="1">
-            Create verification session
-          </button>
-        <?php echo form_close(); ?>
       <?php } ?>
 
       <?php /* ---- local cancellation ---- */ ?>

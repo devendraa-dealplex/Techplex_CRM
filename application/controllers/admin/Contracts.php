@@ -56,6 +56,7 @@ class Contracts extends AdminController
                 }
                 $id = $this->contracts_model->add($this->input->post());
                 if ($id) {
+                    $this->_handle_contract_description_document($id);
                     set_alert('success', _l('added_successfully', _l('contract')));
                     redirect(admin_url('contracts/contract/' . $id));
                 }
@@ -71,6 +72,7 @@ class Contracts extends AdminController
                 }
 
                 $success = $this->contracts_model->update($data, $id);
+                $this->_handle_contract_description_document($id);
                 if ($success) {
                     set_alert('success', _l('updated_successfully', _l('contract')));
                 }
@@ -104,6 +106,54 @@ class Contracts extends AdminController
         $data['title']         = $title;
         $data['bodyclass']     = 'contract';
         $this->load->view('admin/contracts/contract', $data);
+    }
+
+    /**
+     * If a document was uploaded in place of manually typing the
+     * contract description, attach it and use it as the description
+     */
+    private function _handle_contract_description_document($id)
+    {
+        $file = handle_contract_document_field($id, 'description_document');
+        if ($file) {
+            $this->db->where('id', $id);
+            $this->db->update(db_prefix() . 'contracts', [
+                'description' => contract_document_field_link($file),
+            ]);
+        }
+    }
+
+    /**
+     * Upload a document in place of manually typing the contract content
+     */
+    public function upload_content_document($id)
+    {
+        if (staff_cant('edit', 'contracts')) {
+            ajax_access_denied();
+        }
+
+        $file = handle_contract_document_field($id, 'file');
+
+        if (!$file) {
+            echo json_encode([
+                'success' => false,
+                'message' => _l('contract_document_upload_failed'),
+            ]);
+
+            return;
+        }
+
+        $content = contract_document_field_link($file);
+
+        $this->db->where('id', $id);
+        $this->db->update(db_prefix() . 'contracts', [
+            'content' => $content,
+        ]);
+
+        echo json_encode([
+            'success' => true,
+            'content' => $content,
+        ]);
     }
 
     public function get_template()
@@ -333,13 +383,21 @@ class Contracts extends AdminController
         if (!$id) {
             redirect(admin_url('contracts'));
         }
+
+        $may = hooks()->apply_filters('before_contract_delete', ['allowed' => true, 'reason' => ''], $id);
+
+        if (empty($may['allowed'])) {
+            set_alert('warning', $may['reason'] !== '' ? $may['reason'] : _l('problem_deleting', _l('contract_lowercase')));
+            redirect(previous_url() ?: $_SERVER['HTTP_REFERER']);
+        }
+
         $response = $this->contracts_model->delete($id);
         if ($response == true) {
             set_alert('success', _l('deleted', _l('contract')));
         } else {
             set_alert('warning', _l('problem_deleting', _l('contract_lowercase')));
         }
-        
+
         redirect(previous_url() ?: $_SERVER['HTTP_REFERER']);
     }
 

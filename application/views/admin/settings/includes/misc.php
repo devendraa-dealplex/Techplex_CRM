@@ -25,6 +25,8 @@
     <div role="tabpanel" class="tab-pane active" id="misc">
         <?php echo render_yes_no_option('view_contract_only_logged_in', 'settings_require_client_logged_in_to_view_contract'); ?>
         <hr />
+        <?php echo render_input('settings[contract_number_prefix]', 'contract_number_prefix', get_option('contract_number_prefix')); ?>
+        <hr />
         <?php echo render_input('settings[dropbox_app_key]', 'dropbox_app_key', get_option('dropbox_app_key')); ?>
         <hr />
         <?php echo render_input('settings[media_max_file_size_upload]', 'settings_media_max_file_size_upload', get_option('media_max_file_size_upload'), 'number'); ?>

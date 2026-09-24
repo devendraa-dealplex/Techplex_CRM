@@ -120,6 +120,14 @@ $route['proposal/(:num)/(:any)'] = 'proposal/index/$1/$2';
 $route['contract/(:num)/(:any)'] = 'contract/index/$1/$2';
 
 /**
+ * Native contract signing links (payplex_contract_verification). The token
+ * is opaque and carries no internal id, so a single wildcard segment maps
+ * straight onto Sign::index($token).
+ */
+$route['sign/(:any)/document'] = 'payplex_contract_verification/sign/document/$1';
+$route['sign/(:any)'] = 'payplex_contract_verification/sign/index/$1';
+
+/**
  * @since 2.0.0
  */
 $route['knowledge-base']                 = 'knowledge_base/index';

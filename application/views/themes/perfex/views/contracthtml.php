@@ -39,11 +39,28 @@
                     </button>
                     <?= form_hidden('action', 'contract_pdf'); ?>
                     <?= form_close(); ?>
-                    <?php if ($contract->signed == 0 && $contract->marked_as_signed == 0) { ?>
+                    <?php if ($contract->signed == 0 && $contract->marked_as_signed == 0 && hooks()->apply_filters('contract_legacy_signing_allowed', true, (int) $contract->id)) { ?>
                     <button type="submit" id="accept_action" class="btn btn-success action-button">
                         <i class="fa-solid fa-signature"></i>
                         <?= _l('e_signature_sign'); ?>
                     </button>
+                    <?php
+                        /* A module (payplex_contract_verification) may offer additional,
+                           real signing methods here -- e.g. Aadhaar eSign via Leegality.
+                           Empty by default, so an install without such a module renders
+                           exactly as before. */
+                        $signing_options = hooks()->apply_filters('contract_client_signing_options', [], $contract);
+
+                    foreach ($signing_options as $option) {
+                        if (empty($option['url'])) {
+                            continue;
+                        } ?>
+                    <a href="<?= e($option['url']); ?>" target="_blank" rel="noopener"
+                        class="btn btn-success action-button">
+                        <i class="<?= e($option['icon'] ?? 'fa-solid fa-signature'); ?>"></i>
+                        <?= e($option['label']); ?>
+                    </a>
+                    <?php } ?>
                     <?php } ?>
                 </div>
             </div>
@@ -103,7 +120,7 @@
                             <?= _l('contract_number'); ?>
                         </div>
                         <div class="tw-text-normal col-md-7 contract-number tw-text-neutral-700">
-                            <?= e($contract->id); ?>
+                            <?= e(format_contract_number($contract->id)); ?>
                         </div>
                         <div class="tw-text-normal col-md-5 text-muted contract-start-date">
                             <?= _l('contract_start_date'); ?>

@@ -30,7 +30,6 @@
                 <strong>Roster is ready.</strong>
                 <?php echo (int) $readiness['signers']; ?> signer(s),
                 <?php echo (int) $readiness['mandatory']; ?> mandatory,
-                <?php echo (int) $readiness['kyc_required']; ?> requiring Video KYC.
                 Signing order is contiguous.
               </div>
             <?php } else { ?>
@@ -51,6 +50,23 @@
                 its slot and the reason, because the person a contract was previously addressed to is
                 part of its record.
               </div>
+            <?php } ?>
+
+            <?php if (!empty($roster_ready)) { ?>
+            <?php echo form_open(admin_url('payplex_contract_verification/signing/toggle_self_signer/'
+                                           . (int) $contract['id']), array('class' => 'mbot15')); ?>
+              <?php if (!empty($self_signed)) { ?>
+                <input type="hidden" name="enable" value="0">
+                <button type="submit" class="btn btn-default">
+                  <i class="fa-solid fa-signature"></i> You are a signer on this document &mdash; remove me
+                </button>
+              <?php } else { ?>
+                <input type="hidden" name="enable" value="1">
+                <button type="submit" class="btn btn-default">
+                  <i class="fa-regular fa-square"></i> I want to sign this document
+                </button>
+              <?php } ?>
+            <?php echo form_close(); ?>
             <?php } ?>
 
             <div class="row">
@@ -96,22 +112,21 @@
                   </div>
 
                   <div class="form-group">
-                    <label class="control-label">Designation</label>
-                    <input type="text" maxlength="120" class="form-control"
-                           name="designation" id="s_desig">
-                  </div>
-
-                  <div class="form-group">
-                    <label class="control-label">Party</label>
-                    <select name="party" id="s_party" class="form-control">
-                      <?php foreach ($parties as $k => $label) { ?>
-                        <option value="<?php echo html_escape($k); ?>"><?php echo html_escape($label); ?></option>
+                    <label class="control-label">Invitee type</label>
+                    <select name="role" id="s_role" class="form-control">
+                      <?php foreach ($invitee_types as $k => $label) { ?>
+                        <option value="<?php echo html_escape($k); ?>"
+                          <?php echo $k === 'signer' ? 'selected' : ''; ?>><?php echo html_escape($label); ?></option>
                       <?php } ?>
                     </select>
+                    <p class="text-muted small">
+                      A reviewer can see the document but is never sent a signing invitation and can
+                      never be a mandatory signer.
+                    </p>
                   </div>
 
                   <div class="form-group">
-                    <label class="control-label">Authentication method</label>
+                    <label class="control-label">Signature type</label>
                     <select name="auth_method" id="s_auth" class="form-control">
                       <option value="">&mdash; not set &mdash;</option>
                       <?php foreach ($auth_methods as $k => $label) { ?>
@@ -119,35 +134,50 @@
                       <?php } ?>
                     </select>
                     <p class="text-muted small">
-                      Offered here, but <strong>not yet confirmed against Leegality's documented
-                      capabilities</strong>. What a provider actually supports is verified at
-                      integration, and an unsupported choice will be refused there rather than
-                      silently ignored.
+                      <code>virtual</code> uses the CRM's own drawn/typed signature.
+                      <code>email_otp</code>/<code>mobile_otp</code> require a code sent by this CRM
+                      before signing. <code>aadhaar</code> asks for a self-declared Aadhaar number
+                      &mdash; it is stored but <strong>never verified against any government
+                      database</strong>.
                     </p>
                   </div>
 
-                  <div class="form-group">
-                    <label class="control-label">Reminder interval (hours, 0 = none)</label>
-                    <input type="number" min="0" max="8760" class="form-control"
-                           name="reminder_interval_hours" id="s_rem" value="0">
-                  </div>
-
-                  <div class="checkbox">
-                    <label><input type="checkbox" name="is_mandatory" id="s_mand" value="1" checked>
-                      Mandatory signer</label>
-                  </div>
-                  <div class="checkbox">
-                    <label><input type="checkbox" name="is_authorised_signatory" id="s_auth_sig" value="1">
-                      Authorised signatory</label>
-                  </div>
-                  <div class="checkbox">
-                    <label><input type="checkbox" name="kyc_required" id="s_kyc" value="1">
-                      Video KYC required before signing</label>
-                  </div>
-                  <p class="text-muted small">
-                    Video KYC is <strong>not implemented</strong>. This flag records the requirement
-                    so the roster is complete; it does not perform or prove any verification.
+                  <p>
+                    <a href="#invitee-level-options" data-toggle="collapse" class="text-muted">
+                      Invitee level options <i class="fa-solid fa-chevron-down"></i>
+                    </a>
                   </p>
+                  <div class="collapse" id="invitee-level-options">
+                    <div class="form-group">
+                      <label class="control-label">Designation</label>
+                      <input type="text" maxlength="120" class="form-control"
+                             name="designation" id="s_desig">
+                    </div>
+
+                    <div class="form-group">
+                      <label class="control-label">Party</label>
+                      <select name="party" id="s_party" class="form-control">
+                        <?php foreach ($parties as $k => $label) { ?>
+                          <option value="<?php echo html_escape($k); ?>"><?php echo html_escape($label); ?></option>
+                        <?php } ?>
+                      </select>
+                    </div>
+
+                    <div class="form-group">
+                      <label class="control-label">Reminder interval (hours, 0 = none)</label>
+                      <input type="number" min="0" max="8760" class="form-control"
+                             name="reminder_interval_hours" id="s_rem" value="0">
+                    </div>
+
+                    <div class="checkbox">
+                      <label><input type="checkbox" name="is_mandatory" id="s_mand" value="1" checked>
+                        Mandatory signer</label>
+                    </div>
+                    <div class="checkbox">
+                      <label><input type="checkbox" name="is_authorised_signatory" id="s_auth_sig" value="1">
+                        Authorised signatory</label>
+                    </div>
+                  </div>
 
                   <button type="submit" class="btn btn-primary">Save signer</button>
                   <button type="button" class="btn btn-default" id="resetform">Clear</button>
@@ -163,17 +193,26 @@
                     placed against a slot will have nobody to resolve to.
                   </p>
                 <?php } else { ?>
+                  <p class="text-muted small">
+                    Drag <i class="fa-solid fa-grip-vertical"></i> to reorder. Order is saved as soon
+                    as you drop.
+                  </p>
                   <div class="cv-tablewrap"><div class="table-responsive">
-                  <table class="table table-condensed">
+                  <table class="table table-condensed" id="signers-roster-table">
                     <thead><tr>
-                      <th>#</th><th>Name</th><th>Email</th><th>Party</th>
-                      <th>Auth</th><th>KYC</th><th>Req.</th><th></th>
+                      <th></th><th>#</th><th>Name</th><th>Email</th><th>Party</th><th>Type</th>
+                      <th>Auth</th><th>Req.</th><th></th>
                     </tr></thead>
                     <tbody>
                     <?php foreach ($signers as $s) {
                             $replaced = (isset($s['replaced_at']) && $s['replaced_at'] !== null
                                          && (int) $s['replaced_at'] > 0); ?>
-                      <tr<?php echo $replaced ? ' class="text-muted" style="opacity:.6"' : ''; ?>>
+                      <tr<?php echo $replaced ? ' class="text-muted" style="opacity:.6"'
+                                              : ' class="sortable-signer"'; ?>
+                          data-id="<?php echo (int) $s['id']; ?>">
+                        <td class="dragger">
+                          <?php if (!$replaced) { ?><i class="fa-solid fa-grip-vertical"></i><?php } ?>
+                        </td>
                         <td><?php echo (int) $s['signing_order']; ?></td>
                         <td>
                           <?php echo html_escape($s['full_name']); ?>
@@ -189,8 +228,12 @@
                         </td>
                         <td><small><?php echo html_escape($s['email']); ?></small></td>
                         <td><?php echo html_escape($s['party']); ?></td>
+                        <td>
+                          <?php echo (string) $s['role'] === 'reviewer'
+                                ? '<span class="label label-default">reviewer</span>'
+                                : '<span class="label label-primary">signer</span>'; ?>
+                        </td>
                         <td><small><?php echo html_escape((string) $s['auth_method']); ?></small></td>
-                        <td><?php echo empty($s['kyc_required']) ? '&mdash;' : 'yes'; ?></td>
                         <td><?php echo empty($s['is_mandatory']) ? 'optional' : 'yes'; ?></td>
                         <td>
                           <?php if (!$replaced) { ?>
@@ -202,11 +245,11 @@
                               data-mobile="<?php echo html_escape((string) $s['mobile_e164']); ?>"
                               data-desig="<?php echo html_escape((string) $s['designation']); ?>"
                               data-party="<?php echo html_escape($s['party']); ?>"
+                              data-role="<?php echo html_escape((string) $s['role']); ?>"
                               data-auth="<?php echo html_escape((string) $s['auth_method']); ?>"
                               data-rem="<?php echo (int) $s['reminder_interval_hours']; ?>"
                               data-mand="<?php echo (int) $s['is_mandatory']; ?>"
-                              data-authsig="<?php echo (int) $s['is_authorised_signatory']; ?>"
-                              data-kyc="<?php echo (int) $s['kyc_required']; ?>">Edit</button>
+                              data-authsig="<?php echo (int) $s['is_authorised_signatory']; ?>">Edit</button>
 
                             <?php if (empty($has_request)) { ?>
                               <?php echo form_open(admin_url('payplex_contract_verification/signing/signer_delete/'
@@ -280,6 +323,9 @@
             <a class="btn btn-default"
                href="<?php echo admin_url('payplex_contract_verification/signing/fields_editor/'
                                           . (int) $contract['id']); ?>">Place signature fields</a>
+            <a class="btn btn-primary pull-right"
+               href="<?php echo admin_url('payplex_contract_verification/signing/finalize/'
+                                          . (int) $contract['id']); ?>">Finalize &amp; send &raquo;</a>
           </div>
         </div>
       </div>
@@ -300,8 +346,10 @@
     var chk = function (id, v) { var el = document.getElementById(id); if (el) { el.checked = v === '1'; } };
     set('s_id', g('id'));      set('s_order', g('order'));  set('s_name', g('name'));
     set('s_email', g('email')); set('s_mobile', g('mobile')); set('s_desig', g('desig'));
-    set('s_party', g('party')); set('s_auth', g('auth'));    set('s_rem', g('rem'));
-    chk('s_mand', g('mand'));   chk('s_auth_sig', g('authsig')); chk('s_kyc', g('kyc'));
+    set('s_party', g('party')); set('s_role', g('role') || 'signer');
+    set('s_auth', g('auth'));    set('s_rem', g('rem'));
+    chk('s_mand', g('mand'));   chk('s_auth_sig', g('authsig'));
+    syncMandatoryToRole();
     window.scrollTo(0, 0);
   });
 
@@ -312,8 +360,73 @@
       if (f) { f.reset(); }
       var id = document.getElementById('s_id');
       if (id) { id.value = ''; }
+      syncMandatoryToRole();
     });
   }
+
+  /* A reviewer never signs, so "mandatory signer" makes no sense for one --
+     the server enforces this regardless (saveContractSigner() forces
+     is_mandatory off for a reviewer), this just keeps the form honest about
+     what saving will actually do. */
+  function syncMandatoryToRole() {
+    var role = document.getElementById('s_role');
+    var mand = document.getElementById('s_mand');
+    if (!role || !mand) { return; }
+    var isReviewer = role.value === 'reviewer';
+    mand.disabled = isReviewer;
+    if (isReviewer) { mand.checked = false; }
+  }
+
+  var roleSelect = document.getElementById('s_role');
+  if (roleSelect) { roleSelect.addEventListener('change', syncMandatoryToRole); }
+  syncMandatoryToRole();
 })();
+
+$(function () {
+  var contract_id = <?php echo (int) $contract['id']; ?>;
+
+  /* Same drag-handle + jQuery UI sortable convention already used for
+     invoice/estimate line items (init_items_sortable() in main.js) -- reused
+     here rather than adding a second drag-and-drop library for one screen. */
+  var $table = $('#signers-roster-table tbody');
+
+  if ($table.length && $.fn.sortable) {
+    $table.sortable({
+      handle: '.dragger',
+      items: 'tr.sortable-signer',
+      axis: 'y',
+      update: function () {
+        var order = [];
+        $table.find('tr.sortable-signer').each(function () {
+          order.push($(this).data('id'));
+        });
+
+        $.post(admin_url + 'payplex_contract_verification/signing/reorder_signers/' + contract_id, {
+          order: order
+        }).done(function (response) {
+          var data = typeof response === 'string' ? JSON.parse(response) : response;
+          if (data.success) {
+            alert_float('success', data.message);
+            $table.find('tr.sortable-signer').each(function (i) {
+              $(this).find('td').eq(1).text(i + 1);
+            });
+          } else {
+            alert_float('danger', data.message);
+            window.location.reload();
+          }
+        }).fail(function () {
+          alert_float('danger', 'Could not save the new order. Reloading.');
+          window.location.reload();
+        });
+      }
+    });
+  }
+
+  /* Flip the chevron on the "Invitee level options" toggle -- cosmetic only,
+     Bootstrap's own collapse handles the show/hide. */
+  $('[href="#invitee-level-options"]').on('click', function () {
+    $(this).find('i').toggleClass('fa-chevron-down fa-chevron-up');
+  });
+});
 </script>
 <?php init_tail(); ?>

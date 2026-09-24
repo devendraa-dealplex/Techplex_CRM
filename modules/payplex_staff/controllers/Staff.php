@@ -153,12 +153,56 @@ class Staff extends AdminController
             $staffId = $this->guardStaffTarget($staffId, 'staff_profile', 'form');
         }
         $staffId = (int) $staffId;
-        $data['title']    = $staffId ? 'Edit Staff Profile' : 'New Staff Profile';
+        $data['title']    = $staffId ? 'Classify Staff' : 'Classify Staff';
         $data['profile']  = $staffId ? $this->m->currentProfile($staffId) : null;
         $data['core']     = $this->m->coreStaff();
         $data['types']    = Payplex_staff_types::options();
         $data['managers'] = $this->m->currentProfiles();
         $this->load->view('payplex_staff/staff_form', $data);
+    }
+
+    /**
+     * JSON used by the Classify Staff form to auto-fill itself when a staff member is picked.
+     * Existing profile wins; otherwise the CRM account supplies what it knows. Gated exactly
+     * like form(): the same manage capability and the same per-staff guard, so nobody can read
+     * another person's profile through this that they could not open through the form.
+     */
+    public function profile_data($staffId = 0)
+    {
+        $this->guard('manage');
+        $staffId = $this->guardStaffTarget($staffId, 'staff_profile', 'form');
+        $out = array('source' => 'none', 'fields' => new stdClass());
+
+        $p = $this->m->currentProfile((int) $staffId);
+        if ($p) {
+            $keys = array('employee_code', 'employment_type', 'official_email', 'official_mobile', 'department',
+                'designation', 'branch', 'territory', 'reporting_manager_id', 'joining_date', 'probation_end_date',
+                'payout_frequency', 'emergency_contact', 'salary_eligibility', 'commission_eligibility',
+                'expense_eligibility', 'tada_eligibility', 'attendance_required', 'kyc_status', 'pan_status',
+                'target_plan', 'commission_plan');
+            $f = array();
+            foreach ($keys as $k) {
+                if (property_exists($p, $k)) { $f[$k] = $p->$k === null ? '' : (string) $p->$k; }
+            }
+            $out = array(
+                'source' => 'profile', 'fields' => $f,
+                'meta' => array('version' => (int) $p->version, 'status' => (string) $p->status,
+                    'classification_required' => (int) $p->classification_required),
+            );
+        } else {
+            $c = $this->m->coreStaffMember((int) $staffId);
+            if ($c) {
+                $dept = $this->db->select('d.name')->from(db_prefix() . 'staff_departments sd')
+                    ->join(db_prefix() . 'departments d', 'd.departmentid = sd.departmentid')
+                    ->where('sd.staffid', (int) $staffId)->limit(1)->get()->row();
+                $out = array('source' => 'core', 'fields' => array(
+                    'official_email'  => (string) $c->email,
+                    'official_mobile' => (string) ($c->phonenumber ?? ''),
+                    'department'      => $dept ? (string) $dept->name : '',
+                ));
+            }
+        }
+        $this->output->set_content_type('application/json')->set_output(json_encode($out));
     }
 
     public function store()

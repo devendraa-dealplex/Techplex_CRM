@@ -68,6 +68,62 @@ hooks()->add_action('admin_init', 'payplex_staff_menu');
  * ---------------------------------------------------------------------- */
 require_once __DIR__ . '/libraries/Payplex_staff_sync.php';
 
+/**
+ * Setup > Staff > New Staff Member: administrators can fill in the whole workforce profile
+ * on the same form. The fields are posted as wf_* and must never reach the core insert
+ * (tblstaff has no such columns), so the filter below takes them out and parks them until
+ * staff_member_created hands us the new staff id.
+ */
+function payplex_staff_create_stash($set = false, $value = null)
+{
+    static $stash = null;
+    if ($set) { $stash = $value; return null; }
+    $out = $stash; $stash = null;
+    return $out;
+}
+
+hooks()->add_action('staff_render_profile_fields', 'payplex_staff_render_create_fields');
+function payplex_staff_render_create_fields($member)
+{
+    if ($member || !function_exists('is_admin') || !is_admin()) { return; }
+    payplex_staff_guard(function () {
+        $CI = &get_instance();
+        $CI->load->model('payplex_staff/payplex_staff_model', 'ppstaff_form_model');
+        $types = Payplex_staff_types::types();
+        $defs  = array();
+        foreach ($types as $slug => $def) { $defs[$slug] = $def['elig']; }
+        $managers = array_values(array_filter($CI->ppstaff_form_model->coreStaff(), function ($s) { return (int) $s->active === 1; }));
+        $CI->load->view('payplex_staff/staff_create_fields', array(
+            'types' => Payplex_staff_types::options(), 'typeDefs' => $defs, 'managers' => $managers,
+        ));
+    });
+}
+
+hooks()->add_filter('before_create_staff_member', 'payplex_staff_extract_create_fields', 5);
+function payplex_staff_extract_create_fields($data)
+{
+    $wf = array();
+    foreach (array_keys((array) $data) as $k) {
+        if (strpos($k, 'wf_') === 0) {
+            $wf[substr($k, 3)] = $data[$k];
+            unset($data[$k]);
+        }
+    }
+    // Only an administrator's submission is honoured; anything else is discarded.
+    if (!$wf || !function_exists('is_admin') || !is_admin()) {
+        payplex_staff_create_stash(true, null);
+        return $data;
+    }
+    $wf['full_name'] = trim(($data['firstname'] ?? '') . ' ' . ($data['lastname'] ?? ''));
+    if (trim((string) ($wf['official_email'] ?? '')) === '') { $wf['official_email'] = (string) ($data['email'] ?? ''); }
+    foreach (array('kyc_status' => array('pending', 'submitted', 'verified', 'rejected'), 'pan_status' => array('pending', 'submitted', 'verified')) as $f => $ok) {
+        if (!in_array($wf[$f] ?? 'pending', $ok, true)) { $wf[$f] = 'pending'; }
+    }
+    payplex_staff_create_stash(true, $wf);
+
+    return $data;
+}
+
 hooks()->add_action('staff_member_created', 'payplex_staff_on_created');
 function payplex_staff_on_created($payload)
 {
@@ -76,6 +132,22 @@ function payplex_staff_on_created($payload)
         if ($id <= 0) { return $payload; }
         $CI = &get_instance();
         $CI->load->model('payplex_staff/payplex_staff_model');
+
+        $wf = payplex_staff_create_stash();
+        if (is_array($wf) && trim((string) ($wf['employment_type'] ?? '')) !== '') {
+            $wf['staff_id'] = $id;
+            $res = $CI->payplex_staff_model->saveProfile($wf, (int) get_staff_user_id());
+            if (!empty($res['ok'])) { return $payload; }
+            // Account exists already; keep it and fall back to the placeholder profile below.
+            set_alert('warning', 'Staff created, but the workforce profile was not saved: '
+                . implode(', ', array_map(function ($e) { return str_replace('_', ' ', $e); }, (array) ($res['errors'] ?? array('unknown_error'))))
+                . '. Complete it under Staff System.');
+        } elseif (is_array($wf)) {
+            $filled = array_filter($wf, function ($v, $k) {
+                return !in_array($k, array('full_name', 'kyc_status', 'pan_status', 'payout_frequency'), true) && trim((string) $v) !== '';
+            }, ARRAY_FILTER_USE_BOTH);
+            if ($filled) { set_alert('warning', 'Workforce details were not saved because no employment type was chosen. Complete them under Staff System.'); }
+        }
         $CI->payplex_staff_model->ensureProfile($id, 0, 'staff_member_created');
     } catch (\Throwable $e) {
         log_activity('Payplex Staff: profile creation hook failed - ' . $e->getMessage());

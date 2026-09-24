@@ -1,0 +1,5 @@
+# Keeps editors from saving PHP files with a UTF-8 BOM (a BOM is sent before every response and corrupts images/JSON).
+root = true
+
+[*.php]
+charset = utf-8

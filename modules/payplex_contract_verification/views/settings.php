@@ -114,24 +114,6 @@
 
   <div class="row"><div class="col-md-12">
     <div class="panel_s"><div class="panel-body">
-      <h5 class="no-mtop">Tests</h5>
-      <?php echo form_open(admin_url('payplex_contract_verification/signing/test_connection'),
-                           array('style' => 'display:inline')); ?>
-        <button type="submit" class="btn btn-default">Test Connection</button>
-      <?php echo form_close(); ?>
-      <?php echo form_open(admin_url('payplex_contract_verification/signing/sandbox_test'),
-                           array('style' => 'display:inline')); ?>
-        <button type="submit" class="btn btn-default">Send Sandbox Test</button>
-      <?php echo form_close(); ?>
-      <p class="text-muted small mtop15">
-        Neither test displays any part of a credential. Both record the attempt in the audit trail,
-        which is what the production gate reads.
-      </p>
-    </div></div>
-  </div></div>
-
-  <div class="row"><div class="col-md-12">
-    <div class="panel_s"><div class="panel-body">
       <h5 class="no-mtop">Production</h5>
       <p class="text-muted">Every condition below is checked server-side at the moment of the change:</p>
       <ul>

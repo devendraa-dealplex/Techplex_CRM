@@ -3,11 +3,12 @@
 <div id="wrapper"><div class="content">
   <div class="row"><div class="col-md-9">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-      <h4 class="no-margin" style="color:#12507F;font-weight:600"><?php echo $p?'Edit Staff Profile':'New Staff Profile'; ?></h4>
+      <h4 class="no-margin" style="color:#12507F;font-weight:600"><?php echo 'Classify Staff'; ?></h4>
       <a href="<?php echo admin_url('payplex_staff/staff'); ?>" class="btn btn-default btn-sm">Back</a>
     </div>
     <div class="panel_s"><div class="panel-body">
       <?php echo form_open(admin_url('payplex_staff/staff/store')); ?>
+      <div id="prefillnote" class="alert" style="display:none"></div>
       <div class="row">
         <div class="col-md-4 form-group"><label>Staff member <span class="text-danger">*</span></label>
           <?php if ($p): ?><input class="form-control" value="<?php echo html_escape($p->full_name); ?> (#<?php echo (int)$p->staff_id; ?>)" disabled><input type="hidden" name="staff_id" value="<?php echo (int)$p->staff_id; ?>"><input type="hidden" name="full_name" value="<?php echo html_escape($p->full_name); ?>">
@@ -55,7 +56,41 @@
   </div></div>
 </div></div>
 <script>
-(function(){var s=document.getElementById('staffsel');if(s){s.addEventListener('change',function(){var o=s.options[s.selectedIndex];document.getElementById('fullname').value=o?o.getAttribute('data-name'):'';});}})();
+(function(){
+  var s=document.getElementById('staffsel'); if(!s){return;}
+  var form=s.form, note=document.getElementById('prefillnote');
+  var url='<?php echo admin_url('payplex_staff/staff/profile_data/'); ?>';
+  var fieldNames=['employee_code','employment_type','official_email','official_mobile','department','designation','branch','territory','reporting_manager_id','joining_date','probation_end_date','payout_frequency','emergency_contact','kyc_status','pan_status','target_plan','commission_plan'];
+  var flagNames=['salary_eligibility','commission_eligibility','expense_eligibility','tada_eligibility','attendance_required'];
+  var defaults={payout_frequency:'monthly',kyc_status:'pending',pan_status:'pending'};
+  function el(n){return form.elements[n];}
+  function say(msg,cls){ if(!note){return;} note.className='alert alert-'+cls; note.style.display=msg?'block':'none'; note.textContent=msg; }
+  function clearAll(){
+    fieldNames.forEach(function(n){var e=el(n); if(e){e.value=defaults[n]||'';}});
+    flagNames.forEach(function(n){var e=el(n); if(e){e.value='';}});
+  }
+  s.addEventListener('change',function(){
+    var o=s.options[s.selectedIndex];
+    document.getElementById('fullname').value=o?o.getAttribute('data-name'):'';
+    clearAll(); say('', 'info');
+    if(!s.value){return;}
+    say('Loading staff details…','info');
+    fetch(url+encodeURIComponent(s.value),{credentials:'same-origin',headers:{'X-Requested-With':'XMLHttpRequest'}})
+      .then(function(r){ if(!r.ok){throw new Error('denied');} return r.json(); })
+      .then(function(d){
+        var f=d.fields||{};
+        fieldNames.forEach(function(n){ var e=el(n); if(e && f[n]!==undefined && f[n]!==''){ e.value=f[n]; } });
+        flagNames.forEach(function(n){ var e=el(n); if(e && f[n]!==undefined){ e.value=String(f[n]); } });
+        if(d.source==='profile'){
+          var m=d.meta||{};
+          say('Existing profile loaded (v'+m.version+', status: '+m.status+')'+(m.classification_required?' — classification still required.':'.')+' Saving updates it; changing the employment type creates a new version.','success');
+        } else if(d.source==='core'){
+          say('No workforce profile yet — email, mobile and department were filled in from the CRM account. Review and complete the rest.','warning');
+        } else { say('','info'); }
+      })
+      .catch(function(){ say('Could not load details for this staff member (no access?). You can still fill the form manually.','danger'); });
+  });
+})();
 </script>
 <?php init_tail(); ?>
 </body></html>

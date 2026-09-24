@@ -308,6 +308,7 @@
     canvas.style.width  = box.w + 'px';
     canvas.style.height = box.h + 'px';
     canvas.innerHTML = '';
+    if (window.__cvBg) { canvas.appendChild(window.__cvBg); }
     document.getElementById('curpage').textContent = currentPage();
 
     drafts.forEach(function (d) {
@@ -454,7 +455,54 @@
     if (el) { el.addEventListener('change', render); }
   });
 
+  window.__cvRender = render;
   render();
 })();
 </script>
+<?php if (!empty($main_pdf_url)) { ?>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script>
+/* The uploaded PDF is the contract: draw its real page behind the boxes, and take the
+   page size from it so the boxes land in the same coordinates the stamper uses. */
+(function () {
+  if (typeof pdfjsLib === 'undefined') { return; }
+  pdfjsLib.GlobalWorkerOptions.workerSrc =
+    'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+  var pdfDoc = null;
+  var bg = document.createElement('canvas');
+  bg.style.cssText = 'position:absolute;left:0;top:0;pointer-events:none;';
+  window.__cvBg = bg;
+
+  function val(id, d) { var v = parseFloat(document.getElementById(id).value); return isFinite(v) && v > 0 ? v : d; }
+
+  function draw() {
+    if (!pdfDoc) { return; }
+    var n = Math.min(Math.max(1, Math.round(val('page', 1))), pdfDoc.numPages);
+    pdfDoc.getPage(n).then(function (page) {
+      var base = page.getViewport({ scale: 1 });
+      var s = val('scale', 1);
+      document.getElementById('pgw').value = Math.round(base.width * 10) / 10;
+      document.getElementById('pgh').value = Math.round(base.height * 10) / 10;
+      document.getElementById('rot').value = '0';
+      var vp = page.getViewport({ scale: s });
+      bg.width = vp.width; bg.height = vp.height;
+      bg.style.width = vp.width + 'px'; bg.style.height = vp.height + 'px';
+      page.render({ canvasContext: bg.getContext('2d'), viewport: vp }).promise.then(function () {
+        if (window.__cvRender) { window.__cvRender(); }
+      });
+    });
+  }
+
+  ['scale', 'page'].forEach(function (id) {
+    document.getElementById(id).addEventListener('change', draw);
+  });
+
+  pdfjsLib.getDocument(<?php echo json_encode($main_pdf_url); ?>).promise.then(function (doc) {
+    pdfDoc = doc;
+    draw();
+  });
+})();
+</script>
+<?php } ?>
 <?php init_tail(); ?>

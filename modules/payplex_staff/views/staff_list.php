@@ -7,7 +7,7 @@
       <div>
         <?php if ($canManage): ?>
         <a href="<?php echo admin_url('payplex_staff/staff/backfill'); ?>" class="btn btn-default btn-sm"><i class="fa fa-refresh"></i> Backfill existing staff</a>
-        <a href="<?php echo admin_url('payplex_staff/staff/form'); ?>" class="btn btn-info btn-sm"><i class="fa fa-plus"></i> New Profile</a>
+        <a href="<?php echo admin_url('payplex_staff/staff/form'); ?>" class="btn btn-info btn-sm"><i class="fa fa-plus"></i> Classify Staff</a>
         <?php endif; ?>
       </div>
     </div>

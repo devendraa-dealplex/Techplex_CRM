@@ -8,6 +8,8 @@ class Contract_pdf extends App_pdf
 {
     protected $contract;
 
+    private $contract_number;
+
     public function __construct($contract)
     {
         $this->load_language($contract->client);
@@ -16,8 +18,9 @@ class Contract_pdf extends App_pdf
 
         parent::__construct();
 
-        $this->contract = $contract;
-        $this->SetTitle($this->contract->subject);
+        $this->contract        = $contract;
+        $this->contract_number = format_contract_number($contract->id);
+        $this->SetTitle($this->contract_number . ' - ' . $this->contract->subject);
 
         # Don't remove these lines - important for the PDF layout
         $this->contract->content = $this->fix_editor_html($this->contract->content);
@@ -25,9 +28,23 @@ class Contract_pdf extends App_pdf
 
     public function prepare()
     {
-        $this->set_view_vars('contract', $this->contract);
+        $this->set_view_vars([
+            'contract' => $this->contract,
+            'number'   => $this->contract_number,
+        ]);
 
         return $this->build();
+    }
+
+    public function Output($name = 'doc.pdf', $dest = 'I')
+    {
+        $custom = hooks()->apply_filters('contract_pdf_custom_document', null, $this->contract);
+
+        if ($custom) {
+            return $custom->Output($name, $dest);
+        }
+
+        return parent::Output($name, $dest);
     }
 
     protected function type()

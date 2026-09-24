@@ -243,6 +243,7 @@
                                     </div>
                                     <?php $rel_id = (isset($member) ? $member->staffid : false); ?>
                                     <?= render_custom_fields('staff', $rel_id); ?>
+                                    <?php hooks()->do_action('staff_render_profile_fields', $member ?? null); ?>
 
                                     <div class="row">
                                         <div class="col-md-12">

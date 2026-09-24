@@ -101,6 +101,9 @@ $lang['contract_description']     = 'Description';
 $lang['contract_subject_tooltip'] = 'Subject is also visible to customer';
 $lang['contract_client_string']   = 'Customer';
 $lang['contract_attach']          = 'Attach document';
+$lang['contract_type_manually']              = 'Type manually';
+$lang['contract_document_replace_text_hint'] = 'Uploading a document will replace the manually typed text with a link to the file';
+$lang['contract_document_upload_failed']     = 'Document upload failed';
 $lang['contract_list_client']     = 'Customer';
 $lang['contract_list_subject']    = 'Subject';
 $lang['contract_list_start_date'] = 'Start Date';
@@ -3480,6 +3483,7 @@ $lang['allow_non_admin_staff_to_delete_ticket_attachments']     = 'Allow non-adm
 
 # Version 2.1.0
 $lang['contract_number']                                = 'Contract Number';
+$lang['contract_number_prefix']                         = 'Contract Number Prefix';
 $lang['project_changing_status_recurring_tasks_notice'] = 'You are changing the status to {0}, all recurring tasks will be cancelled';
 $lang['not_contract_signed']                            = 'Contract with subject %s has been signed by the customer';
 $lang['the_number_sign']                                = '#';

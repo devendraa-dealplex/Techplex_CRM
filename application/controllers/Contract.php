@@ -27,6 +27,11 @@ class Contract extends ClientsController
 
                     break;
             case 'sign_contract':
+                    if (!hooks()->apply_filters('contract_legacy_signing_allowed', true, (int) $id)) {
+                        set_alert('warning', 'This contract is signed through personal signing links sent by email.');
+                        redirect(site_url('contract/' . $id . '/' . $hash));
+                    }
+
                     process_digital_signature_image($this->input->post('signature', false), CONTRACTS_UPLOADS_FOLDER . $id);
                     $this->contracts_model->add_signature($id);
 

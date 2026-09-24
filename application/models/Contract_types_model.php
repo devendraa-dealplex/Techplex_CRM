@@ -99,20 +99,27 @@ class Contract_types_model extends App_Model
         $labels = [];
         $totals = [];
         $types  = $this->get();
+
+        $where = ['trash' => 0];
+        if (is_client_logged_in()) {
+            $where['client']                = get_client_user_id();
+            $where['not_visible_to_client'] = 0;
+        } elseif (staff_cant('view', 'contracts')) {
+            $where['addedfrom'] = get_staff_user_id();
+        }
+
+        $this->db->select('contract_type, COUNT(id) as total');
+        $this->db->from(db_prefix().'contracts');
+        $this->db->where($where);
+        $this->db->group_by('contract_type');
+
+        $counts = [];
+        foreach ($this->db->get()->result() as $row) {
+            $counts[$row->contract_type] = (int) $row->total;
+        }
+
         foreach ($types as $type) {
-            $total_rows_where = [
-                'contract_type' => $type['id'],
-                'trash'         => 0,
-            ];
-            if (is_client_logged_in()) {
-                $total_rows_where['client']                = get_client_user_id();
-                $total_rows_where['not_visible_to_client'] = 0;
-            } else {
-                if (staff_cant('view', 'contracts')) {
-                    $total_rows_where['addedfrom'] = get_staff_user_id();
-                }
-            }
-            $total_rows = total_rows(db_prefix().'contracts', $total_rows_where);
+            $total_rows = isset($counts[$type['id']]) ? $counts[$type['id']] : 0;
             if ($total_rows == 0 && is_client_logged_in()) {
                 continue;
             }
@@ -144,22 +151,26 @@ class Contract_types_model extends App_Model
         $labels = [];
         $totals = [];
         $types  = $this->get();
+
+        $where = ['trash' => 0];
+        if (staff_cant('view', 'contracts')) {
+            $where['addedfrom'] = get_staff_user_id();
+        }
+
+        $this->db->select('contract_type, SUM(contract_value) as total');
+        $this->db->from(db_prefix().'contracts');
+        $this->db->where($where);
+        $this->db->group_by('contract_type');
+
+        $sums = [];
+        foreach ($this->db->get()->result() as $row) {
+            $sums[$row->contract_type] = $row->total;
+        }
+
         foreach ($types as $type) {
             array_push($labels, $type['name']);
 
-            $where = [
-                'where' => [
-                    'contract_type' => $type['id'],
-                    'trash'         => 0,
-                ],
-                'field' => 'contract_value',
-            ];
-
-            if (staff_cant('view', 'contracts')) {
-                $where['where']['addedfrom'] = get_staff_user_id();
-            }
-
-            $total = sum_from_table(db_prefix().'contracts', $where);
+            $total = isset($sums[$type['id']]) ? $sums[$type['id']] : 0;
             if ($total == null) {
                 $total = 0;
             }

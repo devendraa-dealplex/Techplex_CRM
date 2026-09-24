@@ -10,10 +10,10 @@ require_once __DIR__ . '/../libraries/Contract_failures.php';
 require_once __DIR__ . '/../libraries/Contract_evidence.php';
 require_once __DIR__ . '/../libraries/Contract_signer.php';
 require_once __DIR__ . '/../libraries/Contract_field_mapper.php';
-require_once __DIR__ . '/../libraries/Leegality_provider.php';
 require_once __DIR__ . '/../libraries/Contract_lifecycle.php';
 require_once __DIR__ . '/../libraries/Contract_profile_map.php';
 require_once __DIR__ . '/../libraries/Contract_kyc.php';
+require_once __DIR__ . '/../libraries/Contract_main_document.php';
 require_once __DIR__ . '/../libraries/Contract_invite_token.php';
 require_once __DIR__ . '/../libraries/Contract_circuit.php';
 require_once __DIR__ . '/../libraries/Contract_assignment.php';
@@ -303,50 +303,6 @@ class Signing extends AdminController
         redirect(admin_url('payplex_contract_verification/signing/settings'));
     }
 
-    /**
-     * Prove the credentials work, without revealing them.
-     *
-     * Today this reports that the adapter is not implemented, which is the
-     * truthful answer and is better than a green tick that means nothing.
-     */
-    public function test_connection()
-    {
-        $this->need(has_permission('payplex_contract_verification', '', 'contract_signing_settings'));
-        $this->requireSchema();
-        $this->requirePost();
-
-        $provider = new Leegality_provider(array());
-        $r        = $provider->testConnection();
-
-        $this->cv->audit($this->actor(), 'cv_test_connection', null, null,
-                         array('ok' => !empty($r['ok']), 'reason' => (string) $r['reason']));
-
-        set_alert(empty($r['ok']) ? 'warning' : 'success', (string) $r['message']);
-        redirect(admin_url('payplex_contract_verification/signing/settings'));
-    }
-
-    /**
-     * A full sandbox round trip, using fixture data only.
-     *
-     * Blocked for the same reason as everything else, and it records the
-     * attempt so the production gate can see that it has not passed.
-     */
-    public function sandbox_test()
-    {
-        $this->need(has_permission('payplex_contract_verification', '', 'contract_signing_settings'));
-        $this->requireSchema();
-        $this->requirePost();
-
-        $provider = new Leegality_provider(array());
-        $r        = $provider->testConnection();
-
-        $this->cv->audit($this->actor(), 'cv_sandbox_test', null, null,
-                         array('ok' => false, 'reason' => (string) $r['reason']));
-
-        set_alert('warning', (string) $r['message']);
-        redirect(admin_url('payplex_contract_verification/signing/settings'));
-    }
-
     /* ================================================================
      * The contract panel
      * ============================================================== */
@@ -383,6 +339,39 @@ class Signing extends AdminController
             'can_cancel'  => has_permission('payplex_contract_verification', '', 'contract_signing_cancel'),
             'can_evidence' => has_permission('payplex_contract_verification', '', 'contract_signing_view_evidence'),
             'is_admin'    => $this->isAdminActor(),
+        ));
+    }
+
+    /**
+     * Finalize -- everything staff should check before sending, in one
+     * screen: document preview, invitees, resolved signing order, and Send
+     * itself. Assembles pieces already built for contract_panel.php rather
+     * than duplicating their logic: signerRows() already handles "show the
+     * roster if nothing has been sent yet, the request snapshot if it has",
+     * and the Send form below is the exact one contract_panel.php uses.
+     */
+    public function finalize($contractId = 0)
+    {
+        $this->need(has_permission('payplex_contract_verification', '', 'contract_signing_view'));
+        $this->requireSchema();
+
+        $contract = $this->cv->contract((int) $contractId);
+
+        if (!$contract) { show_404(); }
+
+        $this->needContractAccess($contract);
+
+        $request = $this->cv->latestRequestForContract((int) $contractId);
+        $roster  = $this->cv->rosterReady() ? $this->cv->activeSigners((int) $contractId) : array();
+
+        $this->load->view('payplex_contract_verification/finalize', array(
+            'title'     => 'Finalize',
+            'contract'  => $contract,
+            'request'   => $request,
+            'signers'   => $this->signerRows($request, $roster),
+            'profile'   => $this->cv->profileForContract((int) $contractId),
+            'readiness' => $this->cv->sendReadiness((int) $contractId),
+            'can_send'  => has_permission('payplex_contract_verification', '', 'contract_signing_send'),
         ));
     }
 
@@ -472,15 +461,26 @@ class Signing extends AdminController
 
         $this->needContractAccess($contract);
 
+        $signers = $this->cv->contractSigners((int) $contractId);
+        $staff   = $this->staffMember(get_staff_user_id());
+        $selfIn  = false;
+
+        foreach ($signers as $s) {
+            if ($this->cv->signerIsReplaced($s)) { continue; }
+            if (strtolower((string) $s['email']) === strtolower($staff['email'])) { $selfIn = true; }
+        }
+
         $this->load->view('payplex_contract_verification/signers', array(
             'title'         => 'Signers',
             'contract'      => $contract,
-            'signers'       => $this->cv->contractSigners((int) $contractId),
+            'signers'       => $signers,
             'readiness'     => $this->cv->rosterReadiness((int) $contractId),
             'auth_methods'  => $this->cv->signerAuthMethods(),
             'parties'       => $this->cv->signerParties(),
+            'invitee_types' => $this->cv->signerInviteeTypes(),
             'roster_ready'  => $this->cv->rosterReady(),
             'has_request'   => (bool) $this->cv->latestRequestForContract((int) $contractId),
+            'self_signed'   => $selfIn,
         ));
     }
 
@@ -547,6 +547,83 @@ class Signing extends AdminController
         $this->signerRedirect($contractId, $r, $r['ok'] ? 'Signer removed.' : null);
     }
 
+    /** Drag-to-reorder the roster. AJAX: returns JSON, not a redirect. */
+    public function reorder_signers($contractId = 0)
+    {
+        $this->need(has_permission('payplex_contract_verification', '', 'contract_signing_prepare'));
+        $this->requireSchema();
+        $this->requirePost();
+
+        $contract = $this->cv->contract((int) $contractId);
+
+        if (!$contract) {
+            echo json_encode(array('success' => false, 'message' => 'That contract no longer exists.'));
+
+            return;
+        }
+
+        $this->needContractAccess($contract);
+
+        $order = $this->input->post('order');
+        $ids   = is_array($order) ? $order : array();
+
+        $r = $this->cv->reorderSigners((int) $contractId, $ids);
+
+        echo json_encode(array(
+            'success' => !empty($r['ok']),
+            'message' => !empty($r['ok']) ? 'Signing order updated.' : 'Refused: ' . (string) $r['reason'],
+        ));
+    }
+
+    /** "I want to sign this document" -- add or remove the current staff member as a signer. */
+    public function toggle_self_signer($contractId = 0)
+    {
+        $this->need(has_permission('payplex_contract_verification', '', 'contract_signing_prepare'));
+        $this->requireSchema();
+        $this->requirePost();
+
+        $contract = $this->cv->contract((int) $contractId);
+
+        if (!$contract) { show_404(); }
+
+        $this->needContractAccess($contract);
+
+        $staffId = get_staff_user_id();
+        $staff   = $this->staffMember($staffId);
+
+        $r = $this->cv->toggleSelfSigner(
+            (int) $contractId,
+            $staffId,
+            $staff['name'],
+            $staff['email'],
+            time(),
+            (string) $this->input->post('enable') === '1'
+        );
+
+        $this->signerRedirect($contractId, $r, $r['ok']
+            ? ((string) $this->input->post('enable') === '1'
+                ? 'You have been added as a signer.' : 'You have been removed as a signer.')
+            : null);
+    }
+
+    /** Current staff member's name and email, for the self-sign toggle. */
+    private function staffMember($staffId)
+    {
+        if (isset($GLOBALS['current_user']) && (int) $GLOBALS['current_user']->staffid === (int) $staffId) {
+            return array(
+                'name'  => trim($GLOBALS['current_user']->firstname . ' ' . $GLOBALS['current_user']->lastname),
+                'email' => (string) $GLOBALS['current_user']->email,
+            );
+        }
+
+        $row = $this->db->select('firstname, lastname, email')->where('staffid', (int) $staffId)
+                        ->get(db_prefix() . 'staff')->row();
+
+        if (!$row) { return array('name' => '', 'email' => ''); }
+
+        return array('name' => trim($row->firstname . ' ' . $row->lastname), 'email' => (string) $row->email);
+    }
+
     /** One place that reads signer fields, so every route reads them identically. */
     private function signerInput()
     {
@@ -562,7 +639,7 @@ class Signing extends AdminController
             'is_mandatory'            => $this->input->post('is_mandatory') ? 1 : 0,
             'is_authorised_signatory' => $this->input->post('is_authorised_signatory') ? 1 : 0,
             'auth_method'             => (string) $this->input->post('auth_method'),
-            'kyc_required'            => $this->input->post('kyc_required') ? 1 : 0,
+            'kyc_required'            => 0,
             'reminder_interval_hours' => (int) $this->input->post('reminder_interval_hours'),
         );
     }
@@ -616,6 +693,8 @@ class Signing extends AdminController
         $this->load->view('payplex_contract_verification/fields_editor', array(
             'title'        => 'Place signature fields',
             'contract'     => $contract,
+            'main_pdf_url' => Contract_main_document::path($contract) !== null
+                ? admin_url('payplex_contract_verification/signing/main_pdf/' . (int) $contractId) : '',
             'version'      => $version,
             'drafts'       => $this->cv->draftFields((int) $contractId, $version),
             'approved'     => $this->cv->fields((int) $contractId, $version),
@@ -632,6 +711,29 @@ class Signing extends AdminController
             'can_approve'  => $this->isAdminActor()
                 || has_permission('payplex_contract_verification', '', 'contract_signing_approve'),
         ));
+    }
+
+    /** Stream the uploaded PDF so the placement editor can draw its pages. */
+    public function main_pdf($contractId = 0)
+    {
+        $this->need(has_permission('payplex_contract_verification', '', 'contract_signing_prepare'));
+        $this->requireSchema();
+
+        $contract = $this->cv->contract((int) $contractId);
+
+        if (!$contract) { show_404(); }
+
+        $this->needContractAccess($contract);
+
+        $path = Contract_main_document::path($contract);
+
+        if ($path === null) { show_404(); }
+
+        header('Content-Type: application/pdf');
+        header('Content-Length: ' . filesize($path));
+        header('Content-Disposition: inline; filename="contract.pdf"');
+        readfile($path);
+        exit;
     }
 
     /** Create, move or resize one draft placement. */
@@ -1642,23 +1744,13 @@ class Signing extends AdminController
             redirect(admin_url('payplex_contract_verification/signing/profile_map'));
         }
 
-        $status = (new Leegality_provider($this->cv->providerSettingsForStatus()))->implementationStatus();
-
-        if (empty($status['usable'])) {
-            set_alert('warning',
-                'Validation needs the provider to be configured and enabled. Missing: '
-              . implode(', ', $status['missing']) . '. Nothing was sent.');
-
-            redirect(admin_url('payplex_contract_verification/signing/profile_map'));
-        }
-
         /*
-         * Reached only with credentials present and the module enabled — which
-         * is not the case today, so this branch is unreachable on staging and
-         * deliberately does not pretend otherwise.
+         * There is no external provider left to validate a workflow against.
+         * Native signing does not use a workflow profile at all -- see
+         * sendReadiness() in the model, which no longer requires one.
          */
         set_alert('info',
-            'Provider validation is not wired to a live call yet. The workflow remains unvalidated.');
+            'Workflow profiles are not used by native signing. Nothing to validate.');
 
         redirect(admin_url('payplex_contract_verification/signing/profile_map'));
     }

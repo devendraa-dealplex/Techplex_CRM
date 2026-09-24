@@ -4,6 +4,11 @@
 
   <div class="row"><div class="col-md-12">
     <div class="panel_s"><div class="panel-body">
+      <a class="btn btn-default btn-icon"
+         href="<?php echo admin_url('contracts/contract/' . (int) $contract['id']); ?>">
+        <i class="fa fa-arrow-left"></i> Back to contract
+      </a>
+
       <h4 class="no-mtop">
         <?php echo html_escape($title); ?>
         <?php if (!empty($contract['subject'])) { ?>
@@ -67,40 +72,6 @@
       <h5 class="no-mtop">Preparation</h5>
 
       <?php if (!empty($can_prepare)) { ?>
-        <?php echo form_open(admin_url('payplex_contract_verification/signing/verify_customer/'
-                                       . (int) $contract['id']), array('class' => 'mbot15')); ?>
-          <select name="verification_type" class="form-control" style="max-width:180px;display:inline-block">
-            <option value="pan">PAN</option>
-            <option value="gst">GST</option>
-            <option value="aadhaar">Aadhaar</option>
-            <option value="business">Business</option>
-          </select>
-          <select name="outcome" class="form-control" style="max-width:130px;display:inline-block">
-            <option value="passed">Passed</option>
-            <option value="failed">Failed</option>
-            <option value="pending">Pending</option>
-          </select>
-          <input type="text" name="masked_reference" class="form-control"
-                 style="max-width:160px;display:inline-block" maxlength="40"
-                 placeholder="Masked reference">
-          <button type="submit" class="btn btn-default">Record verification</button>
-          <p class="text-muted small">
-            Record a masked reference only &mdash; the last few characters. A complete identity
-            number is refused rather than truncated.
-          </p>
-        <?php echo form_close(); ?>
-
-        <?php echo form_open(admin_url('payplex_contract_verification/signing/record_video_kyc/'
-                                       . (int) $contract['id']), array('class' => 'mbot15')); ?>
-          <input type="hidden" name="outcome" value="passed">
-          <button type="submit" class="btn btn-default">Manual Video KYC Attestation</button>
-          <p class="text-muted small">
-            This records a staff declaration only; it does not independently verify identity.
-            No video session takes place, nothing is recorded, and no liveness or document check
-            is performed. It is not completed Video KYC, and it must not be presented as one.
-          </p>
-        <?php echo form_close(); ?>
-
         <a class="btn btn-info"
            href="<?php echo admin_url('payplex_contract_verification/signing/signers/'
                                       . (int) $contract['id']); ?>">Signers</a>

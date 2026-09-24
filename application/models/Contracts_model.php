@@ -157,7 +157,7 @@ class Contracts_model extends App_Model
             $data['isexpirynotified'] = 0;
         }
 
-        if ($data['dateend'] !== $contract) {
+        if (isset($data['dateend']) && $data['dateend'] !== $contract->dateend) {
             if (isset($data['trash'])) {
                 $data['trash'] = 1;
             } else {

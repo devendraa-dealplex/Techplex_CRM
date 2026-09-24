@@ -23,7 +23,7 @@ $dayNames = [1 => 'Mon', 2 => 'Tue', 3 => 'Wed', 4 => 'Thu', 5 => 'Fri', 6 => 'S
                 <td><?= html_escape($e['emp_code']); ?></td>
                 <td><?= html_escape($e['full_name']); ?><div class="text-muted"><small><?= html_escape($e['phone']); ?></small></div></td>
                 <td><?= html_escape($e['role']); ?><div class="text-muted"><small><?= html_escape($e['department']); ?></small></div></td>
-                <td><?= html_escape($e['workplace_name']); ?></td>
+                <td><?= $e['workplace_name'] ? html_escape($e['workplace_name']) : '<span class="label label-warning">Not assigned</span>'; ?></td>
                 <td><?= substr($e['start_time'], 0, 5) . '-' . substr($e['end_time'], 0, 5); ?>
                     <div class="text-muted"><small><?= implode(',', array_map(function ($d) use ($dayNames) { return $dayNames[$d] ?? ''; }, explode(',', (string) $e['working_days']))); ?></small></div></td>
                 <td><span class="label label-<?= $e['active'] ? 'success' : 'default'; ?>"><?= $e['active'] ? 'Active' : 'Inactive'; ?></span></td>
@@ -52,10 +52,10 @@ $dayNames = [1 => 'Mon', 2 => 'Tue', 3 => 'Wed', 4 => 'Thu', 5 => 'Fri', 6 => 'S
             <div class="col-sm-12 form-group"><label>Place of work (geofence) *</label>
                 <select name="workplace_id" class="form-control" required><option value="">Select workplace</option>
                 <?php foreach ($workplaces as $w) { ?><option value="<?= (int) $w['id']; ?>"><?= html_escape($w['name']); ?> (<?= (int) $w['radius_m']; ?> m)</option><?php } ?></select></div>
-            <div class="col-sm-6 form-group"><label>Work start *</label><input type="time" name="start_time" class="form-control" value="09:00" required></div>
-            <div class="col-sm-6 form-group"><label>Work end *</label><input type="time" name="end_time" class="form-control" value="18:00" required></div>
+            <div class="col-sm-6 form-group"><label>Work start *</label><input type="time" name="start_time" class="form-control" value="<?= html_escape($defaults['start']); ?>" required></div>
+            <div class="col-sm-6 form-group"><label>Work end *</label><input type="time" name="end_time" class="form-control" value="<?= html_escape($defaults['end']); ?>" required></div>
             <div class="col-sm-12 form-group"><label>Working days *</label><div>
-                <?php foreach ($dayNames as $n => $d) { ?><label class="checkbox-inline"><input type="checkbox" name="working_days[]" value="<?= $n; ?>" <?= $n <= 5 ? 'checked' : ''; ?>> <?= $d; ?></label><?php } ?></div></div>
+                <?php foreach ($dayNames as $n => $d) { ?><label class="checkbox-inline"><input type="checkbox" name="working_days[]" value="<?= $n; ?>" <?= in_array($n, $defaults['days']) ? 'checked' : ''; ?>> <?= $d; ?></label><?php } ?></div></div>
             <div class="col-sm-6 form-group"><label>Phone</label><input name="phone" class="form-control"></div>
             <div class="col-sm-6 form-group"><label>Email</label><input type="email" name="email" class="form-control"></div>
             <div class="col-sm-12 form-group"><label>Profile photo (JPG/PNG, max 2 MB)</label><input type="file" name="photo" accept="image/jpeg,image/png" class="form-control"></div>

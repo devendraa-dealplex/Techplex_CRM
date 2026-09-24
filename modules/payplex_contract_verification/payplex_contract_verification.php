@@ -45,7 +45,6 @@ require_once __DIR__ . '/libraries/Contract_evidence_types.php';
 
 hooks()->add_action('admin_init', 'payplex_cv_capabilities');
 hooks()->add_action('admin_init', 'payplex_cv_menu');
-hooks()->add_action('admin_init', 'payplex_cv_customer_tab');
 
 /**
  * The eight capabilities, written out as a literal map.
@@ -282,11 +281,406 @@ function payplex_cv_contract_action_links($contract)
      * own contract visibility -- and the controller re-checks both, because a
      * hidden link protects nothing against a typed URL.
      */
-    echo '<li><a href="' . $execution . '">Execution &amp; Video KYC</a></li>';
+    echo '<li><a href="' . $execution . '">Execution</a></li>';
     echo '<li><a href="' . $timeline . '">Signing evidence timeline</a></li>';
 }
 
 hooks()->add_action('after_contract_view_as_client_link', 'payplex_cv_contract_action_links');
+
+/**
+ * Contribute "2 Invite" and "3 Finalize" to the contract edit page's stage
+ * row, alongside the core "1 Create" stage it always shows for itself.
+ *
+ * Same visibility rule as payplex_cv_contract_action_links(), for the same
+ * reason: a stage link is not the control, Signing::signers()/finalize()
+ * re-check contract access and the module capability independently, so
+ * hiding this changes what's shown, never what's allowed.
+ *
+ * @param  array  $stages   stages already contributed by other modules
+ * @param  object $contract
+ * @return array
+ */
+function payplex_cv_contract_workflow_stages($stages, $contract)
+{
+    if (!is_object($contract) || !isset($contract->id)) { return $stages; }
+
+    $contractId = (int) $contract->id;
+
+    if ($contractId <= 0) { return $stages; }
+
+    if (!is_admin()) {
+        if (staff_cant('view', 'contracts') && staff_cant('view_own', 'contracts')) { return $stages; }
+
+        if (staff_cant('view', 'contracts')
+            && (!isset($contract->addedfrom)
+                || (int) $contract->addedfrom !== (int) get_staff_user_id())) { return $stages; }
+
+        if (!has_permission('payplex_contract_verification', '', 'contract_signing_view')) { return $stages; }
+    }
+
+    $stages[] = array(
+        'key'   => 'invite',
+        'label' => '2 Invite',
+        'url'   => admin_url('payplex_contract_verification/signing/signers/' . $contractId),
+    );
+    $stages[] = array(
+        'key'   => 'finalize',
+        'label' => '3 Finalize',
+        'url'   => admin_url('payplex_contract_verification/signing/finalize/' . $contractId),
+    );
+
+    return $stages;
+}
+
+hooks()->add_filter('contract_workflow_stages', 'payplex_cv_contract_workflow_stages', 10, 2);
+
+/**
+ * A contract with a live signing request is signed only through each signer's
+ * own link. The stock one-click "Sign" on the client contract page would mark
+ * the whole contract signed by a single person and skip everyone else.
+ */
+function payplex_cv_legacy_signing_allowed($allowed, $contractId)
+{
+    if (!$allowed) { return false; }
+
+    $ci = &get_instance();
+    $ci->load->model('payplex_contract_verification/contract_verification_model', 'cv');
+
+    $request = $ci->cv->latestRequestForContract((int) $contractId);
+
+    if (!$request) { return true; }
+
+    return in_array((string) $request['state'], array('cancelled', 'expired', 'declined', 'failed'), true);
+}
+
+hooks()->add_filter('contract_legacy_signing_allowed', 'payplex_cv_legacy_signing_allowed', 10, 2);
+
+/**
+ * When the contract has an uploaded PDF, that PDF is the document: return it
+ * with every completed signer's signature stamped where its field was placed.
+ * Returning null leaves the standard generated PDF in place.
+ *
+ * @param  mixed  $custom
+ * @param  object $contract
+ * @return mixed
+ */
+function payplex_cv_contract_pdf_document($custom, $contract)
+{
+    if ($custom !== null || !is_object($contract) || empty($contract->id)) { return $custom; }
+
+    require_once __DIR__ . '/libraries/Contract_main_document.php';
+
+    $path = Contract_main_document::path($contract);
+
+    if ($path === null) { return $custom; }
+
+    $ci = &get_instance();
+    $ci->load->model('payplex_contract_verification/contract_verification_model', 'cv');
+
+    $data = $ci->cv->stampData((int) $contract->id);
+
+    return Contract_main_document::render($path, $data['signers'], $data['fields']);
+}
+
+hooks()->add_filter('contract_pdf_custom_document', 'payplex_cv_contract_pdf_document', 10, 2);
+
+/**
+ * Who signed, who's left -- one line, right under the stage row on the
+ * contract dashboard, so a staff member sees it without leaving the page.
+ *
+ * Same visibility rule as the stage row it sits under: nothing here is the
+ * access control, Signing::signers() re-checks independently.
+ *
+ * @param object $contract
+ */
+function payplex_cv_contract_signer_summary($contract)
+{
+    if (!is_object($contract) || empty($contract->id)) { return; }
+
+    if (!is_admin()) {
+        if (staff_cant('view', 'contracts') && staff_cant('view_own', 'contracts')) { return; }
+        if (staff_cant('view', 'contracts')
+            && (!isset($contract->addedfrom)
+                || (int) $contract->addedfrom !== (int) get_staff_user_id())) { return; }
+        if (!has_permission('payplex_contract_verification', '', 'contract_signing_view')) { return; }
+    }
+
+    $ci = &get_instance();
+    $ci->load->model('payplex_contract_verification/contract_verification_model', 'cv');
+
+    $request = $ci->cv->latestRequestForContract((int) $contract->id);
+
+    if (!$request) { return; }
+
+    $signers = $ci->cv->signers((int) $request['id']);
+
+    if (empty($signers)) { return; }
+
+    $signed    = array();
+    $remaining = array();
+
+    foreach ($signers as $s) {
+        if ((string) $s['role'] === 'reviewer') { continue; }
+
+        $label = e((string) $s['full_name']);
+
+        if ((int) $s['completed_at'] > 0) {
+            $signed[] = $label;
+        } else {
+            $remaining[] = $label;
+        }
+    }
+
+    if (empty($signed) && empty($remaining)) { return; }
+
+    if ((int) $contract->signed === 1 && empty($signed)) {
+        $by = trim((string) (isset($contract->acceptance_firstname) ? $contract->acceptance_firstname : '') . ' '
+                 . (string) (isset($contract->acceptance_lastname) ? $contract->acceptance_lastname : ''));
+        echo '<div class="alert alert-warning">This contract is marked signed, but no signer has signed through '
+           . 'the signing links. It was signed outside this workflow'
+           . ($by !== '' ? ' by ' . e($by) : '')
+           . (!empty($contract->acceptance_date) ? ' on ' . e($contract->acceptance_date) : '')
+           . '. Use More &rarr; Clear signature to reset it.</div>';
+    }
+
+    echo '<div class="mbot15">';
+    echo '<span class="label label-success" data-toggle="tooltip" title="' . e(implode(', ', $signed)) . '">'
+       . '<i class="fa fa-check"></i> Signed: ' . count($signed) . '/' . (count($signed) + count($remaining))
+       . '</span> ';
+
+    if (!empty($signed)) {
+        echo '<span class="text-muted small">' . implode(', ', $signed) . '</span>';
+    }
+
+    if (!empty($remaining)) {
+        echo ' &nbsp; <span class="label label-warning"><i class="fa fa-clock-o"></i> Remaining: '
+           . count($remaining) . '</span> ';
+        echo '<span class="text-muted small">' . implode(', ', $remaining) . '</span>';
+    }
+
+    echo '</div>';
+}
+
+hooks()->add_action('after_contract_workflow_stages', 'payplex_cv_contract_signer_summary');
+
+/**
+ * Stamp EVERY completed native signer's signature into the contract PDF,
+ * not just the single legacy one PDF_Signature::process_signature() draws
+ * from tblcontracts.signature/acceptance_*.
+ *
+ * WHY A HOOK, NOT AN EDIT TO PDF_Signature.php
+ * ---------------------------------------------
+ * The module rule elsewhere in this file is: no core file touched. TCPDF's
+ * own Close() already calls process_signature() through a filter
+ * (`process_pdf_signature_on_close`) and then fires a `pdf_close` action on
+ * the SAME $pdf instance before finishing the document — that is the one
+ * shared document layer this contract's PDF has. Suppressing the core
+ * single-signer block and drawing our own multi-signer block on that same
+ * instance keeps every signature on one document, appended in signing
+ * order, with no per-signer copy of the PDF ever created.
+ *
+ * @param  bool $default
+ * @return bool
+ */
+function payplex_cv_suppress_legacy_pdf_signature($default)
+{
+    if (empty($GLOBALS['contract_pdf']) || empty($GLOBALS['contract_pdf']->id)) {
+        return $default;
+    }
+
+    $ci = &get_instance();
+    $ci->load->model('payplex_contract_verification/contract_verification_model', 'cv');
+
+    $request = $ci->cv->latestRequestForContract((int) $GLOBALS['contract_pdf']->id);
+
+    if (!$request) {
+        return $default;
+    }
+
+    $signed = $ci->cv->getCompletedSigners((int) $request['id']);
+
+    return empty($signed) ? $default : false;
+}
+
+hooks()->add_filter('process_pdf_signature_on_close', 'payplex_cv_suppress_legacy_pdf_signature', 10, 1);
+
+/**
+ * Draw every completed signer's captured signature, in signing order, onto
+ * the PDF instance that is about to close. Runs after
+ * payplex_cv_suppress_legacy_pdf_signature() has stopped the single-signer
+ * legacy block, so this is additive, not duplicate.
+ *
+ * @param array $data {pdf_instance, type}
+ */
+function payplex_cv_stamp_all_signatures($data)
+{
+    $pdf = isset($data['pdf_instance']) ? $data['pdf_instance'] : null;
+
+    if (!$pdf || (isset($data['type']) ? $data['type'] : '') !== 'contract') { return; }
+    if (empty($GLOBALS['contract_pdf']) || empty($GLOBALS['contract_pdf']->id)) { return; }
+
+    $contractId = (int) $GLOBALS['contract_pdf']->id;
+
+    $ci = &get_instance();
+    $ci->load->model('payplex_contract_verification/contract_verification_model', 'cv');
+
+    $request = $ci->cv->latestRequestForContract($contractId);
+    if (!$request) { return; }
+
+    $signers = $ci->cv->getCompletedSigners((int) $request['id']);
+    if (empty($signers)) { return; }
+
+    // signing_order, not completion time -- the printed document lists
+    // signers in the order the contract assigned them, regardless of which
+    // one happened to finish last.
+    usort($signers, function ($a, $b) {
+        return (int) $a['signing_order'] <=> (int) $b['signing_order'];
+    });
+
+    $dir       = CONTRACTS_UPLOADS_FOLDER . $contractId . '/';
+    $dims      = $pdf->getPageDimensions();
+    $width     = $dims['wk'] - ($dims['rm'] + $dims['lm']);
+
+    $pdf->Ln(10);
+
+    foreach ($signers as $signer) {
+        $path = $dir . (string) $signer['signature_image'];
+
+        if (!is_file($path)) { continue; }
+
+        $imageData = base64_encode(file_get_contents($path));
+
+        $html  = '<div nobr="true"><span style="font-weight:bold;">'
+               . e((string) $signer['full_name']) . '</span> ('
+               . e(ucfirst((string) $signer['role'])) . ')<br />'
+               . _l('contract_signed_date') . ': ' . _dt(date('Y-m-d H:i:s', (int) $signer['completed_at'])) . '<br />'
+               . '<img src="@' . $imageData . '" width="180" />'
+               . '</div><br />';
+
+        $pdf->MultiCell($width, 0, $html, 0, 'L', 0, 1, '', '', true, 0, true, false, 0);
+    }
+}
+
+hooks()->add_action('pdf_close', 'payplex_cv_stamp_all_signatures');
+
+/**
+ * Refuse to let the stock Delete button destroy verification evidence.
+ *
+ * WHY THIS EXISTS
+ * ----------------
+ * Contracts_model::delete() is a hard delete with no concept of this module.
+ * Deleting a contract with an active legal hold, any signing request -- sent,
+ * in progress or completed -- or any recorded KYC decision would silently
+ * orphan or destroy exactly the evidence
+ * 212_retention_holds_and_decisions.php exists to protect, and that
+ * migration's own comment is explicit that a deletion sweep is a separate,
+ * deliberately-unwritten change. This is the other half: not code that
+ * destroys evidence, code that refuses to let something else destroy it by
+ * accident.
+ *
+ * `before_contract_delete` does not exist in core. Contracts::delete() calls
+ * it as a plain apply_filters() with a default of {allowed: true}, so an
+ * install without this module behaves exactly as it does today -- this only
+ * changes behaviour where a module actually answers.
+ *
+ * WHAT IS STILL ALLOWED
+ * ----------------------
+ * A contract that was never sent for signing -- no request row, no legal
+ * hold, no KYC decision -- has nothing here worth protecting. Deleting it is
+ * allowed, and payplex_cv_after_contract_delete() below clears the roster,
+ * draft placements and staff assignments so nothing about it lingers.
+ *
+ * @param  array $decision   {allowed, reason}
+ * @param  int   $contractId
+ * @return array {allowed, reason}
+ */
+function payplex_cv_before_contract_delete($decision, $contractId)
+{
+    $contractId = (int) $contractId;
+
+    if ($contractId <= 0) { return $decision; }
+    if (!function_exists('get_instance')) { return $decision; }
+
+    $CI = &get_instance();
+    $CI->load->model(PAYPLEX_CV_MODULE . '/contract_verification_model', 'cv');
+
+    if (!$CI->cv->schemaReady()) { return $decision; }
+
+    try {
+        if ($CI->cv->contractHasActiveLegalHold($contractId)) {
+            return array('allowed' => false, 'reason' =>
+                'This contract has an active legal hold in Contract Verification and cannot be '
+              . 'deleted. Release the hold first if it is no longer needed.');
+        }
+
+        if ($CI->cv->contractHasSigningRequest($contractId)) {
+            return array('allowed' => false, 'reason' =>
+                'This contract has a signing request in Contract Verification -- sent, in '
+              . 'progress, or completed -- and cannot be deleted, to avoid losing signing '
+              . 'evidence or an in-progress signature. Cancel it there first.');
+        }
+
+        if ($CI->cv->contractHasKycDecisions($contractId)) {
+            return array('allowed' => false, 'reason' =>
+                'This contract has recorded KYC decisions in Contract Verification and cannot be '
+              . 'deleted.');
+        }
+    } catch (Throwable $e) {
+        /* Refuse, don't fatal, and don't silently allow. An error here means
+           we could not confirm the contract is free of protected data, which
+           is exactly when deleting it anyway is the wrong default. */
+        return array('allowed' => false, 'reason' =>
+            'Contract Verification could not confirm this contract has no protected signing or '
+          . 'KYC data, so deletion was refused rather than risk destroying it.');
+    }
+
+    return $decision;
+}
+
+hooks()->add_filter('before_contract_delete', 'payplex_cv_before_contract_delete', 10, 2);
+
+/**
+ * Clear this module's prep-only rows once core has actually deleted the
+ * contract.
+ *
+ * Only reachable for a contract payplex_cv_before_contract_delete() allowed,
+ * which means it carried no legal hold, no signing request and no KYC
+ * decision -- so nothing purgePrepDataForDeletedContract() removes is
+ * evidence of anything; it is working state that no longer refers to a
+ * contract that exists.
+ */
+function payplex_cv_after_contract_delete($contractId)
+{
+    $contractId = (int) $contractId;
+
+    if ($contractId <= 0) { return; }
+    if (!function_exists('get_instance')) { return; }
+
+    $CI = &get_instance();
+    $CI->load->model(PAYPLEX_CV_MODULE . '/contract_verification_model', 'cv');
+
+    if (!$CI->cv->schemaReady()) { return; }
+
+    try {
+        $CI->cv->purgePrepDataForDeletedContract($contractId);
+    } catch (Throwable $e) {
+        /* The contract is already gone. Anything left behind here is an inert
+           row an orphan sweep can find later, not a reason to fatal a delete
+           that has already happened. */
+    }
+}
+
+hooks()->add_action('after_contract_deleted', 'payplex_cv_after_contract_delete');
+
+/*
+ * The client-facing "Sign with Aadhaar (via Leegality)" button that used to
+ * be contributed here is gone along with the Leegality integration. Signers
+ * now reach a signing page through the link this module emails them
+ * directly (see Contract_verification_model::nativeIssueSigningInvites()),
+ * not by visiting the shared contract page and finding an extra button --
+ * so the contract_client_signing_options filter has no handler registered
+ * here any more.
+ */
 
 /**
  * Narrow-screen behaviour for this module's tables.

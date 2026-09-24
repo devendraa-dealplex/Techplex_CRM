@@ -15,10 +15,10 @@ require_once __DIR__ . '/../libraries/Evidence_store.php';
 require_once __DIR__ . '/../libraries/Kyc_decision_service.php';
 require_once __DIR__ . '/../libraries/Contract_signer.php';
 require_once __DIR__ . '/../libraries/Contract_caps.php';
-require_once __DIR__ . '/../libraries/Leegality_provider.php';
 require_once __DIR__ . '/../libraries/Contract_lifecycle.php';
 require_once __DIR__ . '/../libraries/Contract_profile_map.php';
 require_once __DIR__ . '/../libraries/Contract_kyc.php';
+require_once __DIR__ . '/../libraries/Contract_main_document.php';
 require_once __DIR__ . '/../libraries/Contract_invite_token.php';
 require_once __DIR__ . '/../libraries/Contract_circuit.php';
 
@@ -76,6 +76,96 @@ class Contract_verification_model extends App_Model
         }
 
         return $out;
+    }
+
+    /* ================================================================
+     * Deletion safety
+     *
+     * Backs payplex_cv_before_contract_delete() in the module bootstrap, which
+     * the core Contracts controller's `before_contract_delete` filter calls
+     * before Contracts_model::delete() runs its hard delete. See that
+     * function's doc comment for why this exists at all: 212's own migration
+     * comment says a deletion sweep needs its own approval, and this is the
+     * other half of that -- not a sweep, a refusal.
+     * ============================================================== */
+
+    /**
+     * Is there an active legal hold recorded against this contract?
+     *
+     * The table is optional (migration 212): an install that has not run it
+     * has no holds to check, which is a fact about that install, not a false
+     * negative to work around.
+     */
+    public function contractHasActiveLegalHold($contractId)
+    {
+        if (!$this->db->table_exists($this->t('payplex_cv_legal_holds'))) { return false; }
+
+        return $this->db->where('contract_id', (int) $contractId)
+                        ->where('is_active', 1)
+                        ->count_all_results($this->t('payplex_cv_legal_holds')) > 0;
+    }
+
+    /**
+     * Has a signing request ever been created for this contract -- sent, in
+     * progress, or completed?
+     *
+     * Any of those is provider-side state a contract deletion must not
+     * silently orphan, so this deliberately does not filter by request state:
+     * an in-progress request is exactly as unsafe to orphan as a completed
+     * one, just for a different reason.
+     */
+    public function contractHasSigningRequest($contractId)
+    {
+        if (!$this->db->table_exists($this->t('payplex_cv_requests'))) { return false; }
+
+        return $this->db->where('contract_id', (int) $contractId)
+                        ->count_all_results($this->t('payplex_cv_requests')) > 0;
+    }
+
+    /**
+     * Has any KYC decision ever been recorded for this contract?
+     *
+     * Belt and braces alongside contractHasSigningRequest(): a decision is
+     * always reached through a request today, but this does not assume that
+     * stays true.
+     */
+    public function contractHasKycDecisions($contractId)
+    {
+        if (!$this->db->table_exists($this->t('payplex_cv_kyc_decisions'))) { return false; }
+
+        return $this->db->where('contract_id', (int) $contractId)
+                        ->count_all_results($this->t('payplex_cv_kyc_decisions')) > 0;
+    }
+
+    /**
+     * Remove prep-only rows for a contract the core controller has just
+     * deleted.
+     *
+     * Only ever reached after payplex_cv_before_contract_delete() allowed the
+     * deletion -- meaning no active legal hold, no signing request, no KYC
+     * decision existed for it -- so everything removed here is working state
+     * that never became evidence of an attempted or completed signature.
+     */
+    public function purgePrepDataForDeletedContract($contractId)
+    {
+        $contractId = (int) $contractId;
+
+        if ($contractId <= 0) { return; }
+
+        if ($this->db->table_exists($this->t('payplex_cv_contract_signers'))) {
+            $this->db->where('contract_id', $contractId)
+                     ->delete($this->t('payplex_cv_contract_signers'));
+        }
+
+        if ($this->db->table_exists($this->t('payplex_cv_field_drafts'))) {
+            $this->db->where('contract_id', $contractId)
+                     ->delete($this->t('payplex_cv_field_drafts'));
+        }
+
+        if ($this->db->table_exists($this->t('payplex_cv_assignments'))) {
+            $this->db->where('contract_id', $contractId)
+                     ->delete($this->t('payplex_cv_assignments'));
+        }
     }
 
     /**
@@ -352,22 +442,18 @@ class Contract_verification_model extends App_Model
 
         return array(
             /*
-             * Constructed, not called statically.
-             *
-             * This read `Leegality_provider::implementationStatus()`, and
-             * implementationStatus() is an instance method — which PHP 8 turns
-             * into a fatal error, not a notice. The whole provider settings
-             * screen returned HTTP 500 with an empty body: the one screen where
-             * the sandbox credentials are supposed to be entered.
-             *
-             * It went unnoticed because every test built a provider properly
-             * and exercised the method on the instance, so the suite proved the
-             * method works while nothing proved the CALLER was shaped right.
-             * `providerSettingsForStatus()` passes presence markers rather than
-             * credentials, so no secret is read here.
+             * No external provider exists any more -- signing happens
+             * natively in this CRM. Kept as a key (rather than removed)
+             * because views/settings.php still reads $status['provider']
+             * to decide whether to show a warning banner; 'implemented' now
+             * simply means "native signing is available", which it always is
+             * once the schema has migrated.
              */
-            'provider'        => (new Leegality_provider($this->providerSettingsForStatus()))
-                                     ->implementationStatus(),
+            'provider'        => array(
+                'implemented' => true,
+                'detail'      => 'Signing is handled natively by this CRM. No external provider is used.',
+                'requires'    => array(),
+            ),
             'settings_ready'  => empty($op['missing']),
             'missing'         => $op['missing'],
             'blocked_by'      => $op['blocked_by'],
@@ -524,6 +610,7 @@ class Contract_verification_model extends App_Model
     public function signerAuthMethods()
     {
         return array(
+            'virtual'    => 'Virtual Sign (drawn/typed signature)',
             'email_otp'  => 'Email OTP',
             'mobile_otp' => 'Mobile OTP',
             'aadhaar'    => 'Aadhaar eSign',
@@ -534,6 +621,22 @@ class Contract_verification_model extends App_Model
     public function signerParties()
     {
         return array('customer' => 'Customer', 'internal' => 'Internal', 'witness' => 'Witness');
+    }
+
+    /**
+     * Invitee type: does this person sign, or only review.
+     *
+     * A reviewer can never be a mandatory signature (saveContractSigner()
+     * forces is_mandatory off for one) and is skipped by
+     * nativeIssueSigningInvites() -- a reviewer never gets a signing link.
+     * They stay on the roster, the panel and the audit trail; they are just
+     * never asked to sign.
+     *
+     * @return array
+     */
+    public function signerInviteeTypes()
+    {
+        return array('signer' => 'Signer', 'reviewer' => 'Reviewer');
     }
 
     /**
@@ -613,6 +716,18 @@ class Contract_verification_model extends App_Model
 
         if (!isset($this->signerParties()[$party])) {
             return array('ok' => false, 'reason' => 'unknown_party');
+        }
+
+        /*
+         * An empty value means "not chosen yet" on the add form and defaults to
+         * signer in saveContractSigner(), so it is accepted here. Anything
+         * non-empty must be one of the two invitee types we actually know how
+         * to act on.
+         */
+        $role = isset($in['role']) ? (string) $in['role'] : '';
+
+        if ($role !== '' && !isset($this->signerInviteeTypes()[$role])) {
+            return array('ok' => false, 'reason' => 'unknown_invitee_type');
         }
 
         $auth = isset($in['auth_method']) ? (string) $in['auth_method'] : '';
@@ -697,11 +812,15 @@ class Contract_verification_model extends App_Model
             'party'                   => (string) $in['party'],
             'role'                    => isset($in['role']) && (string) $in['role'] !== ''
                                             ? mb_substr((string) $in['role'], 0, 20) : 'signer',
-            'is_mandatory'            => empty($in['is_mandatory']) ? 0 : 1,
+            /* A reviewer does not sign, so a reviewer cannot be a mandatory
+               signature regardless of what the form posted -- enforced here
+               rather than trusted from the client. */
+            'is_mandatory'            => (isset($in['role']) && (string) $in['role'] === 'reviewer')
+                                            ? 0 : (empty($in['is_mandatory']) ? 0 : 1),
             'is_authorised_signatory' => empty($in['is_authorised_signatory']) ? 0 : 1,
             'auth_method'             => isset($in['auth_method']) && (string) $in['auth_method'] !== ''
                                             ? (string) $in['auth_method'] : null,
-            'kyc_required'            => empty($in['kyc_required']) ? 0 : 1,
+            'kyc_required'            => 0,
             'signing_deadline_at'     => !empty($in['signing_deadline_at'])
                                             ? (int) $in['signing_deadline_at'] : null,
             /* 0 = live. Migration 206 makes this column NOT NULL DEFAULT 0 and
@@ -873,6 +992,136 @@ class Contract_verification_model extends App_Model
         $this->audit($actorId, 'signer_removed', $contractId, null, array('signer_id' => (int) $signerId));
 
         return array('ok' => true, 'reason' => null);
+    }
+
+    /**
+     * Reorder the live roster to match a given sequence of signer ids.
+     *
+     * Backs drag-to-reorder on the Signers screen. The set of ids passed in
+     * must be EXACTLY the live roster's ids -- no more, no fewer -- so a stale
+     * drag (another tab already added or removed someone) is refused rather
+     * than silently applied to a roster that no longer matches what the
+     * operator was looking at.
+     *
+     * WHY TWO PASSES
+     * ---------------
+     * `cv_roster_slot` is a UNIQUE KEY on (contract_id, signing_order,
+     * replaced_at). Writing the new 1..N order one row at a time can collide
+     * with a live row still sitting on the slot being written to (e.g.
+     * swapping 1 and 2 by updating id-for-slot-1 first would try to put it on
+     * slot 2 while the current slot-2 row is still there). Moving every row to
+     * a high, unused range first, then down to its real slot, means no
+     * intermediate state can collide with another live row.
+     *
+     * @param  int   $contractId
+     * @param  array $orderedIds  signer ids, in the desired new order
+     * @return array {ok, reason}
+     */
+    public function reorderSigners($contractId, array $orderedIds)
+    {
+        if (!$this->rosterReady()) {
+            return array('ok' => false, 'reason' => 'roster_table_missing');
+        }
+
+        $contractId = (int) $contractId;
+        $orderedIds = array_values(array_unique(array_map('intval', $orderedIds)));
+
+        $liveIds = array();
+
+        foreach ($this->activeSigners($contractId) as $s) { $liveIds[] = (int) $s['id']; }
+
+        $a = $liveIds; sort($a);
+        $b = $orderedIds; sort($b);
+
+        if ($a !== $b) {
+            return array('ok' => false, 'reason' => 'order_does_not_match_live_roster');
+        }
+
+        $table = $this->t('payplex_cv_contract_signers');
+
+        $this->db->trans_start();
+
+        $offset = 10000;
+
+        foreach ($orderedIds as $i => $id) {
+            $this->db->where('id', $id)->where('contract_id', $contractId)
+                     ->update($table, array('signing_order' => $offset + $i));
+        }
+
+        foreach ($orderedIds as $i => $id) {
+            $this->db->where('id', $id)->where('contract_id', $contractId)
+                     ->update($table, array('signing_order' => $i + 1));
+        }
+
+        $this->db->trans_complete();
+
+        if ($this->db->trans_status() === false) {
+            return array('ok' => false, 'reason' => 'reorder_failed');
+        }
+
+        return array('ok' => true, 'reason' => 'reordered');
+    }
+
+    /**
+     * Add or remove the current staff member as a signer on this contract --
+     * "I want to sign this document".
+     *
+     * Reuses saveContractSigner()/removeContractSigner() rather than writing
+     * to the roster directly, so a self-added signer is validated, audited and
+     * blocked-from-removal-after-a-request-exists exactly like any other row.
+     *
+     * @param  int    $contractId
+     * @param  int    $staffId
+     * @param  string $staffName
+     * @param  string $staffEmail
+     * @param  int    $now
+     * @param  bool   $enable  true to add, false to remove
+     * @return array {ok, reason}
+     */
+    public function toggleSelfSigner($contractId, $staffId, $staffName, $staffEmail, $now, $enable)
+    {
+        $contractId = (int) $contractId;
+        $staffEmail = strtolower(trim((string) $staffEmail));
+
+        if ($staffEmail === '') {
+            return array('ok' => false, 'reason' => 'staff_has_no_email');
+        }
+
+        $existing  = null;
+        $maxOrder  = 0;
+
+        foreach ($this->activeSigners($contractId) as $s) {
+            if (strtolower((string) $s['email']) === $staffEmail) { $existing = $s; }
+            $maxOrder = max($maxOrder, (int) $s['signing_order']);
+        }
+
+        if ($enable) {
+            if ($existing) {
+                return array('ok' => true, 'reason' => 'already_present', 'id' => (int) $existing['id']);
+            }
+
+            return $this->saveContractSigner($contractId, array(
+                'id'                      => 0,
+                'full_name'               => $staffName,
+                'email'                   => $staffEmail,
+                'mobile_e164'             => '',
+                'designation'             => '',
+                'party'                   => 'internal',
+                'role'                    => 'signer',
+                'signing_order'           => $maxOrder + 1,
+                'is_mandatory'            => 1,
+                'is_authorised_signatory' => 1,
+                'auth_method'             => 'virtual',
+                'kyc_required'            => 0,
+                'reminder_interval_hours' => 0,
+            ), $staffId, $now);
+        }
+
+        if (!$existing) {
+            return array('ok' => true, 'reason' => 'not_present');
+        }
+
+        return $this->removeContractSigner($contractId, (int) $existing['id'], $staffId, $now);
     }
 
     /**
@@ -1697,6 +1946,17 @@ class Contract_verification_model extends App_Model
 
         $id = (int) $this->db->insert_id();
 
+        /* Placements drawn before a request existed were bound to the default
+           version; carry them onto this request's version so they are found. */
+        $newVersion = 'v' . (int) $now;
+        $this->db->where('contract_id', (int) $contractId)->where('contract_version !=', $newVersion)
+                 ->update($this->t('payplex_cv_fields'), array('contract_version' => $newVersion));
+
+        if ($this->draftsReady()) {
+            $this->db->where('contract_id', (int) $contractId)->where('contract_version !=', $newVersion)
+                     ->update($this->t('payplex_cv_field_drafts'), array('contract_version' => $newVersion));
+        }
+
         $this->audit((int) $actorId, 'cv_submitted_for_approval', (int) $contractId, $id, array());
 
         return array('ok' => true, 'reason' => 'submitted', 'request_id' => $id,
@@ -1741,6 +2001,11 @@ class Contract_verification_model extends App_Model
                          'message' => 'This contract has already been approved.');
         }
 
+        /* Lock the approved document: a later edit changes this digest. */
+        $this->db->where('id', (int) $req['id'])->update($this->t('payplex_cv_requests'), array(
+            'original_sha256' => $this->documentDigest((int) $contractId),
+        ));
+
         $this->audit((int) $actorId, 'cv_approved_for_signing', (int) $contractId, (int) $req['id'],
             array('submitted_by' => (int) $req['submitted_by']));
 
@@ -1757,7 +2022,7 @@ class Contract_verification_model extends App_Model
      */
     public function sendForSigning($contractId, $actorId, $holdsSend, $isAdmin, $now)
     {
-        $req = $this->latestRequestForContract($contractId);
+        $req = $this->ensureDocumentLocked($this->latestRequestForContract($contractId));
 
         if (!$req) {
             return array('ok' => false, 'reason' => 'not_submitted',
@@ -1773,16 +2038,15 @@ class Contract_verification_model extends App_Model
                              : 'You are not able to send this contract.');
         }
 
+        $this->materialiseRequestSigners($req, (int) $contractId, (int) $now);
+
         $ready = Contract_evidence::readyToSend(array(
             'original_digest'   => $req['original_sha256'],
             'contract_version'  => $req['contract_version'],
             'fields_mapped'     => count($this->fields($contractId, (string) $req['contract_version'])) > 0,
             'signers'           => $this->signers((int) $req['id']),
-            'verification_done' => $this->hasVerification($contractId, 'pan')
-                                   || $this->hasVerification($contractId, 'gst')
-                                   || $this->hasVerification($contractId, 'business')
-                                   || $this->hasVerification($contractId, 'aadhaar'),
-            'video_kyc_done'    => $this->hasVerification($contractId, 'video_kyc'),
+            'verification_done' => true,
+            'video_kyc_done'    => true,
             'approved_by'       => (int) $req['approved_by'],
         ));
 
@@ -1794,22 +2058,22 @@ class Contract_verification_model extends App_Model
         }
 
         /*
-         * The provider call. The operation reference generated when the request
-         * was created is reused on every retry, so a timeout followed by a
-         * retry cannot create a second signing request.
+         * Native invitations. The operation reference generated when the
+         * request was created is reused on every retry, so a timeout followed
+         * by a retry cannot issue a second round of links.
          */
-        $provider = new Leegality_provider(array());
-        $r        = $provider->createSigningRequest((int) $contractId, '',
-                                                    $this->signers((int) $req['id']), array());
+        $r = $this->nativeIssueSigningInvites((int) $req['id'], (int) $contractId, $actorId, $now);
 
         $this->db->where('id', (int) $req['id'])->update($this->t('payplex_cv_requests'), array(
-            'attempts'     => (int) $req['attempts'] + 1,
-            'last_failure' => empty($r['ok']) ? (string) $r['reason'] : null,
+            'attempts'             => (int) $req['attempts'] + 1,
+            'last_failure'         => empty($r['ok']) ? (string) $r['reason'] : null,
+            'external_request_id'  => empty($r['ok']) ? $req['external_request_id'] : ('native-' . (int) $req['id']),
+            'state'                => empty($r['ok']) ? $req['state'] : 'invitation_sent',
         ));
 
         $this->audit((int) $actorId, 'cv_send_attempted', (int) $contractId, (int) $req['id'],
             array('ok' => !empty($r['ok']), 'reason' => (string) $r['reason'],
-                  'operation_reference_reused' => true));
+                  'invited' => (int) (isset($r['invited']) ? $r['invited'] : 0)));
 
         if (empty($r['ok'])) {
             return array('ok' => false, 'reason' => (string) $r['reason'],
@@ -1819,7 +2083,213 @@ class Contract_verification_model extends App_Model
         return array('ok' => true, 'reason' => 'sent', 'message' => 'Sent for signature.');
     }
 
-    /** Re-issue a signing link. The link is never written to the audit trail. */
+    /**
+     * Snapshot the live roster into this request's signer rows.
+     *
+     * The Signers screen edits the roster; invitations, OTP and signatures all
+     * work off per-request signer rows. Nothing else creates those rows, so
+     * without this a send always finds "no signers". Runs once per request
+     * (a retry keeps the same rows and therefore the same references), and
+     * also binds any placed field that has no signer yet to the signer with
+     * the same signing order.
+     */
+    private function materialiseRequestSigners(array $req, $contractId, $now)
+    {
+        $table = $this->t('payplex_cv_signers');
+
+        if ($this->db->where('request_id', (int) $req['id'])->count_all_results($table) === 0) {
+            foreach ($this->activeSigners($contractId) as $s) {
+                if ((string) $s['role'] === 'reviewer') { continue; }
+
+                $this->db->insert($table, array(
+                    'request_id'       => (int) $req['id'],
+                    'reference'        => Contract_signer::newReference(),
+                    'full_name'        => (string) $s['full_name'],
+                    'email'            => (string) $s['email'],
+                    'mobile_e164'      => $s['mobile_e164'] !== '' ? $s['mobile_e164'] : null,
+                    'role'             => (string) $s['role'],
+                    'signing_order'    => (int) $s['signing_order'],
+                    'is_mandatory'     => (int) $s['is_mandatory'],
+                    'signature_method' => $s['auth_method'] ? (string) $s['auth_method'] : 'virtual',
+                    'kyc_required'     => 0,
+                    'state'            => 'created',
+                    'created_at'       => (int) $now,
+                ));
+            }
+        }
+
+        foreach ($this->signers((int) $req['id']) as $s) {
+            $this->db->where('contract_id', (int) $contractId)
+                     ->where('contract_version', (string) $req['contract_version'])
+                     ->where('signing_order', (int) $s['signing_order'])
+                     ->where('signer_reference IS NULL', null, false)
+                     ->update($this->t('payplex_cv_fields'), array('signer_reference' => (string) $s['reference']));
+        }
+    }
+
+    /**
+     * Native signing invitations -- one email per live signer on the request,
+     * each carrying their own single-use signing link.
+     *
+     * Replaces the Leegality create-request call this module used to make.
+     * Reuses Contract_invite_token exactly as issueKycInvite() does (opaque
+     * token, hashed storage, TTL, resend limits) but for purpose
+     * `contract_signing` rather than `video_kyc`, and -- unlike the KYC
+     * invite, which is deliberately a no-op pending outbound delivery being
+     * switched on -- this one actually sends, because native signing has no
+     * other way for a signer to ever reach their document.
+     *
+     * @param  int $requestId
+     * @param  int $contractId
+     * @param  int $actorId
+     * @param  int $now
+     * @return array {ok, reason, invited}
+     */
+    public function nativeIssueSigningInvites($requestId, $contractId, $actorId, $now)
+    {
+        $signers = $this->signers((int) $requestId);
+
+        if (!$signers) {
+            return array('ok' => false, 'reason' => 'no_signers', 'invited' => 0);
+        }
+
+        $contract = $this->contract((int) $contractId);
+        $ttl      = (int) $this->setting('link_expiry_hours', Contract_invite_token::DEFAULT_TTL_HOURS);
+        $invited  = 0;
+
+        foreach ($signers as $signer) {
+            if ((int) $signer['completed_at'] > 0 || (int) $signer['declined_at'] > 0) { continue; }
+
+            $sent = $this->issueAndSendSigningInvite($signer, $contract, $ttl, $actorId, $now);
+
+            if (!empty($sent['ok'])) { $invited++; }
+        }
+
+        if ($invited === 0) {
+            return array('ok' => false, 'reason' => 'no_invitations_issued', 'invited' => 0);
+        }
+
+        return array('ok' => true, 'reason' => 'invited', 'invited' => $invited);
+    }
+
+    /**
+     * Issue one signer's token and email their link.
+     *
+     * @param  array  $signer   row from payplex_cv_signers
+     * @param  object $contract
+     * @param  int    $ttlHours
+     * @param  int    $actorId
+     * @param  int    $now
+     * @return array {ok, reason}
+     */
+    private function issueAndSendSigningInvite(array $signer, $contract, $ttlHours, $actorId, $now)
+    {
+        $token  = Contract_invite_token::issue($now, $ttlHours);
+        $tokens = $this->t('payplex_cv_invite_tokens');
+
+        $this->db->insert($tokens, array(
+            'purpose'      => 'contract_signing',
+            'contract_id'  => (int) $contract['id'],
+            'signer_id'    => (int) $signer['id'],
+            'token_hash'   => $token['hash'],
+            'token_algo'   => $token['algo'],
+            'issued_at'    => (int) $now,
+            'expires_at'   => (int) $token['expires_at'],
+            'resend_count' => 0,
+            'last_sent_at' => (int) $now,
+            'created_by'   => (int) $actorId,
+        ));
+
+        $tokenId = (int) $this->db->insert_id();
+
+        if ($tokenId <= 0) {
+            return array('ok' => false, 'reason' => 'token_write_failed');
+        }
+
+        $url = site_url('sign/' . rawurlencode($token['raw']));
+        $ok  = $this->sendSigningInviteEmail($signer, $contract, $url, (int) $token['expires_at']);
+
+        $this->db->insert($this->t('payplex_cv_deliveries'), array(
+            'purpose'          => 'contract_signing_invitation',
+            'channel'          => 'email',
+            'contract_id'      => (int) $contract['id'],
+            'signer_id'        => (int) $signer['id'],
+            'invite_token_id'  => $tokenId,
+            'recipient_masked' => Contract_invite_token::maskEmail((string) $signer['email']),
+            'template_key'     => 'contract_signing_invitation',
+            'attempt'          => 1,
+            'status'           => $ok ? 'sent' : 'failed',
+            'queued_at'        => (int) $now,
+            'created_by'       => (int) $actorId,
+        ));
+
+        $this->db->where('id', (int) $signer['id'])->update($this->t('payplex_cv_signers'), array(
+            'invited_at' => (int) $now,
+        ));
+
+        if (!$ok) {
+            return array('ok' => false, 'reason' => 'email_send_failed');
+        }
+
+        return array('ok' => true, 'reason' => 'sent');
+    }
+
+    /**
+     * The mail system sends nothing unless a row with the template's slug
+     * exists in Setup -> Email Templates. Nothing else creates these two, so
+     * create them on first use (create_email_template() is a no-op if present).
+     */
+    private function ensureEmailTemplates()
+    {
+        create_email_template(
+            'Please sign: {contract_subject}',
+            '<p>Hello {signer_name},</p>'
+            . '<p>You have been asked to sign <strong>{contract_subject}</strong>.</p>'
+            . '<p><a href="{signing_link}">Open the document and sign</a></p>'
+            . '<p>This link is personal to you, can be used once, and expires on {link_expiry}.</p>',
+            'contract',
+            'Contract signing invitation',
+            'contract-signing-invite',
+            1
+        );
+
+        create_email_template(
+            'Your signing code',
+            '<p>Hello {signer_name},</p>'
+            . '<p>Your one-time code to sign is <strong>{otp_code}</strong>. '
+            . 'It expires in {otp_expiry_minutes} minutes.</p>',
+            'contract',
+            'Contract signing one-time code',
+            'contract-signing-otp',
+            1
+        );
+    }
+
+    /**
+     * Send one signer's invitation email.
+     *
+     * Goes through the app's own database-templated mail system (the same
+     * mechanism `send_contract_signed_notification_to_staff()` already uses)
+     * rather than an ad-hoc send, so this email is editable from
+     * Setup -> Email Templates like every other one in the product, and
+     * benefits for free from its from/reply-to resolution, BCC, header and
+     * footer wrapping, and delivery logging.
+     *
+     * @return bool
+     */
+    private function sendSigningInviteEmail(array $signer, $contract, $url, $expiresAt)
+    {
+        $email = trim((string) $signer['email']);
+
+        if ($email === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) { return false; }
+
+        $this->ensureEmailTemplates();
+
+        return (bool) send_mail_template('contract_signing_invite', PAYPLEX_CV_MODULE,
+                                         $signer, $contract, $url, $expiresAt);
+    }
+
+    /** Re-issue a signing link -- a new native token, the old one revoked. */
     public function resendSigningLink($contractId, $reference, $actorId, $now)
     {
         $signer = $this->signerByReference($reference);
@@ -1845,9 +2315,9 @@ class Contract_verification_model extends App_Model
                                     . 'invitation has already been issued.');
         }
 
-        $provider = new Leegality_provider(array());
-        $r        = $provider->getSigningLink((string) $req['external_request_id'],
-                                              (string) $signer['reference']);
+        $contract = $this->contract($contractId);
+        $ttl      = (int) $this->setting('link_expiry_hours', Contract_invite_token::DEFAULT_TTL_HOURS);
+        $r        = $this->issueAndSendSigningInvite($signer, $contract, $ttl, $actorId, $now);
 
         /* The URL is deliberately absent from this audit row. It is a bearer
            credential for that person's identity. */
@@ -1863,12 +2333,422 @@ class Contract_verification_model extends App_Model
         return array('ok' => true, 'reason' => 'resent', 'message' => 'A new signing link was issued.');
     }
 
+    /* ================================================================
+     * Native public signing -- resolving a token, OTP, and completion.
+     * Backs the public Sign controller (modules/.../controllers/Sign.php).
+     * ============================================================== */
+
     /**
-     * Ask the provider for the authoritative status and reconcile.
+     * Resolve a raw signing token from a public URL to the signer and
+     * contract it belongs to.
      *
-     * Never downgrades a completed record: applyState() refuses, and the
-     * disagreement is recorded for review rather than resolved by whichever
-     * message arrived last.
+     * @param  string $rawToken
+     * @param  int    $now
+     * @return array {ok, reason, token_id, signer, contract}
+     */
+    public function resolveSigningToken($rawToken, $now)
+    {
+        $rawToken = trim((string) $rawToken);
+
+        if ($rawToken === '' || !$this->schemaReady()) {
+            return array('ok' => false, 'reason' => 'no_token_presented');
+        }
+
+        $hash = Contract_invite_token::hash($rawToken);
+
+        $row = $this->db->where('token_hash', $hash)->where('purpose', 'contract_signing')
+                        ->get($this->t('payplex_cv_invite_tokens'))->row_array();
+
+        if (!$row) {
+            return array('ok' => false, 'reason' => 'token_does_not_match');
+        }
+
+        $check = Contract_invite_token::verify($rawToken, $row, (int) $now);
+
+        if (empty($check['ok'])) {
+            return array('ok' => false, 'reason' => (string) $check['reason']);
+        }
+
+        $signer = $this->db->where('id', (int) $row['signer_id'])
+                           ->get($this->t('payplex_cv_signers'))->row_array();
+
+        if (!$signer) {
+            return array('ok' => false, 'reason' => 'signer_not_found');
+        }
+
+        if ((int) $signer['completed_at'] > 0) {
+            return array('ok' => false, 'reason' => 'already_used');
+        }
+
+        $contract = $this->contract((int) $row['contract_id']);
+
+        if (!$contract) {
+            return array('ok' => false, 'reason' => 'contract_not_found');
+        }
+
+        return array('ok' => true, 'reason' => 'valid', 'token_id' => (int) $row['id'],
+                     'signer' => $signer, 'contract' => $contract);
+    }
+
+    /**
+     * Generate and send a 6-digit OTP for a signer completing email_otp or
+     * mobile_otp signing, or the OTP step inside self-attested Aadhaar
+     * capture.
+     *
+     * The code is hashed the same way an invite token is (unsalted SHA-256 --
+     * correct here for the same reason: 6 digits of a cryptographically
+     * random source has no meaningful dictionary either way, but this value
+     * additionally lives for minutes, not hours, and a fixed number of wrong
+     * guesses locks it, so brute force is bounded regardless).
+     *
+     * @param  int $signerId
+     * @param  int $now
+     * @return array {ok, reason}
+     */
+    public function generateSigningOtp($signerId, $now)
+    {
+        $signer = $this->db->where('id', (int) $signerId)
+                           ->get($this->t('payplex_cv_signers'))->row_array();
+
+        if (!$signer) { return array('ok' => false, 'reason' => 'signer_not_found'); }
+
+        $code = str_pad((string) random_int(0, 999999), 6, '0', STR_PAD_LEFT);
+        $ttl  = 600; // 10 minutes
+
+        $this->db->where('id', (int) $signerId)->update($this->t('payplex_cv_signers'), array(
+            'otp_hash'       => hash('sha256', $code),
+            'otp_expires_at' => (int) $now + $ttl,
+            'otp_attempts'   => 0,
+            'otp_verified_at' => null,
+        ));
+
+        $ok = $this->sendSigningOtpEmail($signer, $code, $ttl);
+
+        return array('ok' => $ok, 'reason' => $ok ? 'sent' : 'send_failed');
+    }
+
+    private function sendSigningOtpEmail(array $signer, $code, $ttlSeconds)
+    {
+        $email = trim((string) $signer['email']);
+
+        if ($email === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) { return false; }
+
+        $minutes = (int) ceil($ttlSeconds / 60);
+
+        $this->ensureEmailTemplates();
+
+        return (bool) send_mail_template('contract_signing_otp', PAYPLEX_CV_MODULE,
+                                         $signer, $code, $minutes);
+    }
+
+    /**
+     * Verify a presented OTP against a signer's row.
+     *
+     * Five wrong attempts and the code is dead -- a fresh one has to be
+     * requested. Constant-time comparison, same reasoning as an invite token.
+     *
+     * @param  int    $signerId
+     * @param  string $code
+     * @param  int    $now
+     * @return array {ok, reason}
+     */
+    public function verifySigningOtp($signerId, $code, $now)
+    {
+        $signer = $this->db->where('id', (int) $signerId)
+                           ->get($this->t('payplex_cv_signers'))->row_array();
+
+        if (!$signer) { return array('ok' => false, 'reason' => 'signer_not_found'); }
+
+        if (empty($signer['otp_hash'])) {
+            return array('ok' => false, 'reason' => 'no_otp_requested');
+        }
+
+        if ((int) $signer['otp_attempts'] >= 5) {
+            return array('ok' => false, 'reason' => 'too_many_attempts');
+        }
+
+        if ((int) $now >= (int) $signer['otp_expires_at']) {
+            return array('ok' => false, 'reason' => 'expired');
+        }
+
+        $code = trim((string) $code);
+
+        if (!hash_equals((string) $signer['otp_hash'], hash('sha256', $code))) {
+            $this->db->where('id', (int) $signerId)
+                     ->set('otp_attempts', 'otp_attempts + 1', false)
+                     ->update($this->t('payplex_cv_signers'));
+
+            return array('ok' => false, 'reason' => 'code_does_not_match');
+        }
+
+        $this->db->where('id', (int) $signerId)->update($this->t('payplex_cv_signers'), array(
+            'otp_verified_at' => (int) $now,
+        ));
+
+        return array('ok' => true, 'reason' => 'verified');
+    }
+
+    /**
+     * Complete one signer's signature: save the drawn/typed signature image,
+     * capture a self-attested Aadhaar number where that method was chosen,
+     * mark the signer complete, consume the token, and -- if every mandatory
+     * signer on this request is now complete -- mark the whole contract
+     * signed.
+     *
+     * @param  int    $signerId
+     * @param  int    $tokenId
+     * @param  string $signatureBase64  PNG data URI part, as process_digital_signature_image() expects
+     * @param  string $aadhaarNumber    only used when the signer's method is 'aadhaar'
+     * @param  string $ip
+     * @param  int    $now
+     * @return array {ok, reason, contract_completed}
+     */
+    public function completeNativeSigning($signerId, $tokenId, $signatureBase64, $aadhaarNumber, $ip, $now)
+    {
+        $signer = $this->db->where('id', (int) $signerId)
+                           ->get($this->t('payplex_cv_signers'))->row_array();
+
+        if (!$signer) { return array('ok' => false, 'reason' => 'signer_not_found', 'contract_completed' => false); }
+
+        if ((int) $signer['completed_at'] > 0) {
+            return array('ok' => false, 'reason' => 'already_signed', 'contract_completed' => false);
+        }
+
+        $method = (string) (isset($signer['signature_method']) ? $signer['signature_method'] : 'virtual');
+
+        if (in_array($method, array('email_otp', 'mobile_otp'), true) || $method === 'aadhaar') {
+            if ((int) $signer['otp_verified_at'] <= 0) {
+                return array('ok' => false, 'reason' => 'otp_not_verified', 'contract_completed' => false);
+            }
+        }
+
+        $request = $this->request((int) $signer['request_id']);
+
+        if (!$request) {
+            return array('ok' => false, 'reason' => 'request_not_found', 'contract_completed' => false);
+        }
+
+        $contractId = (int) $request['contract_id'];
+        $dir        = CONTRACTS_UPLOADS_FOLDER . $contractId . '/signers/';
+
+        if (!process_digital_signature_image((string) $signatureBase64, $dir)) {
+            return array('ok' => false, 'reason' => 'signature_capture_failed', 'contract_completed' => false);
+        }
+
+        $imageFile = (string) (isset($GLOBALS['processed_digital_signature'])
+                                ? $GLOBALS['processed_digital_signature'] : '');
+
+        $update = array(
+            'completed_at'     => (int) $now,
+            'state'            => 'completed',
+            'signature_image'  => 'signers/' . $imageFile,
+            'signed_ip'        => substr((string) $ip, 0, 45),
+        );
+
+        if ($method === 'aadhaar') {
+            $aadhaarNumber = preg_replace('/\D/', '', (string) $aadhaarNumber);
+
+            if (strlen($aadhaarNumber) !== 12) {
+                return array('ok' => false, 'reason' => 'invalid_aadhaar_number', 'contract_completed' => false);
+            }
+
+            $update['aadhaar_number_enc'] = $this->encrypt($aadhaarNumber);
+            $update['aadhaar_last4']      = substr($aadhaarNumber, -4);
+        }
+
+        $this->db->trans_start();
+
+        $this->db->where('id', (int) $signerId)->update($this->t('payplex_cv_signers'), $update);
+
+        if ((int) $tokenId > 0) {
+            $this->db->where('id', (int) $tokenId)->update($this->t('payplex_cv_invite_tokens'), array(
+                'consumed_at'      => (int) $now,
+                'consumed_ip_hash' => hash('sha256', (string) $ip),
+            ));
+        }
+
+        $this->db->trans_complete();
+
+        if ($this->db->trans_status() === false) {
+            return array('ok' => false, 'reason' => 'write_failed', 'contract_completed' => false);
+        }
+
+        $this->audit(0, 'native_signature_completed', $contractId, (int) $request['id'], array(
+            'signer_id' => (int) $signerId,
+            'method'    => $method,
+        ));
+
+        $completed = $this->maybeCompleteContract((int) $request['id'], (int) $signerId, $now);
+
+        return array('ok' => true, 'reason' => 'signed', 'contract_completed' => $completed);
+    }
+
+    /**
+     * Signers on the same request who have already completed signing --
+     * used to show a not-yet-signed signer who else has already signed
+     * before they add their own signature, and to list every signature
+     * together once the document is fully executed.
+     *
+     * @param  int      $requestId
+     * @param  int|null $excludeSignerId  omit this signer's own row (typically the current signer)
+     * @return array    rows ordered by completion time, each with full_name, role, completed_at, signature_image
+     */
+    public function getCompletedSigners($requestId, $excludeSignerId = null)
+    {
+        $this->db->where('request_id', (int) $requestId)
+                  ->where('completed_at IS NOT NULL', null, false)
+                  ->where('signature_image IS NOT NULL', null, false);
+
+        if ($excludeSignerId !== null) {
+            $this->db->where('id !=', (int) $excludeSignerId);
+        }
+
+        return $this->db->order_by('completed_at', 'ASC')
+                         ->get($this->t('payplex_cv_signers'))
+                         ->result_array();
+    }
+
+    /**
+     * Everything needed to stamp the uploaded PDF: completed signers (with the
+     * absolute path of their signature image) and the placed fields for the
+     * request's document version.
+     *
+     * @return array {signers, fields}
+     */
+    public function stampData($contractId)
+    {
+        $out     = array('signers' => array(), 'fields' => array());
+        $request = $this->latestRequestForContract((int) $contractId);
+
+        if (!$request) { return $out; }
+
+        $dir = CONTRACTS_UPLOADS_FOLDER . (int) $contractId . '/';
+
+        foreach ($this->getCompletedSigners((int) $request['id']) as $s) {
+            $img = $dir . (string) $s['signature_image'];
+
+            if (!is_file($img)) { continue; }
+
+            $s['image']       = $img;
+            $out['signers'][] = $s;
+        }
+
+        $out['fields'] = $this->fields((int) $contractId, (string) $request['contract_version']);
+
+        return $out;
+    }
+
+    /**
+     * An approved request that was approved before the digest was being saved
+     * has none. Save it now, so such a request can still be sent and any later
+     * edit is still detected.
+     */
+    private function ensureDocumentLocked($request)
+    {
+        if (!$request || (int) $request['approved_at'] <= 0 || (string) $request['original_sha256'] !== '') {
+            return $request;
+        }
+
+        $digest = $this->documentDigest((int) $request['contract_id']);
+
+        if ($digest !== '') {
+            $this->db->where('id', (int) $request['id'])->update($this->t('payplex_cv_requests'),
+                array('original_sha256' => $digest));
+            $request['original_sha256'] = $digest;
+        }
+
+        return $request;
+    }
+
+    /** SHA-256 of what signers will be shown: the uploaded PDF if there is one, else the contract text. */
+    public function documentDigest($contractId)
+    {
+        $doc = $this->db->select('id, subject, description, content')->where('id', (int) $contractId)
+                        ->get($this->t('contracts'))->row_array();
+
+        if (!$doc) { return ''; }
+
+        $pdf = Contract_main_document::path($doc);
+
+        if ($pdf !== null) { return hash_file('sha256', $pdf); }
+
+        return hash('sha256', (string) $doc['subject'] . "
+" . (string) $doc['content']);
+    }
+
+    /**
+     * If every mandatory, live signer on this request has now completed,
+     * mark the contract fully signed.
+     *
+     * Reuses the existing `contracts.signed` column -- everything downstream
+     * (PDF generation, dashboards, the "is_signed" label) already keys off
+     * it. contracthtml.php shows a single "signed by" name; with several
+     * signers there is no one right answer, so the legacy acceptance_*
+     * columns are populated from whichever signer completes LAST -- good
+     * enough for that one display line. The authoritative per-signer record
+     * remains payplex_cv_signers.
+     *
+     * @param  int $requestId
+     * @param  int $lastSignerId
+     * @param  int $now
+     * @return bool true if the contract was just marked signed
+     */
+    private function maybeCompleteContract($requestId, $lastSignerId, $now)
+    {
+        $request = $this->request((int) $requestId);
+
+        if (!$request) { return false; }
+
+        $signers = $this->signers((int) $requestId);
+
+        $mandatoryOutstanding = 0;
+
+        foreach ($signers as $s) {
+            if (empty($s['is_mandatory'])) { continue; }
+            if ((int) $s['completed_at'] <= 0) { $mandatoryOutstanding++; }
+        }
+
+        if ($mandatoryOutstanding > 0) { return false; }
+
+        $lastSigner = null;
+
+        foreach ($signers as $s) {
+            if ((int) $s['id'] === (int) $lastSignerId) { $lastSigner = $s; break; }
+        }
+
+        $contractId = (int) $request['contract_id'];
+        $update     = array('signed' => 1);
+
+        if ($lastSigner) {
+            $nameParts = preg_split('/\s+/', trim((string) $lastSigner['full_name']), 2);
+
+            $update['acceptance_firstname'] = (string) (isset($nameParts[0]) ? $nameParts[0] : '');
+            $update['acceptance_lastname']  = (string) (isset($nameParts[1]) ? $nameParts[1] : '');
+            $update['acceptance_email']     = (string) $lastSigner['email'];
+            $update['acceptance_date']      = date('Y-m-d H:i:s', (int) $now);
+            $update['acceptance_ip']        = (string) $lastSigner['signed_ip'];
+        }
+
+        $this->db->where('id', $contractId)->update(db_prefix() . 'contracts', $update);
+
+        $this->audit(0, 'native_contract_fully_signed', $contractId, (int) $requestId, array(
+            'signers' => count($signers),
+        ));
+
+        if (function_exists('send_contract_signed_notification_to_staff')) {
+            send_contract_signed_notification_to_staff($contractId);
+        }
+
+        return true;
+    }
+
+    /**
+     * There is no provider to ask, so there is nothing to reconcile.
+     *
+     * Kept as a no-op (rather than removed) because the admin "sync" button
+     * and the cron reconciliation job both still call this by name; native
+     * signing writes completion directly (see completeNativeSigning()) so
+     * status is never out of date the way a provider-driven flow could be.
      */
     public function syncStatus($contractId, $actorId, $now)
     {
@@ -1879,25 +2759,11 @@ class Contract_verification_model extends App_Model
                          'message' => 'There is no signing request for this contract.');
         }
 
-        $provider = new Leegality_provider(array());
-        $r        = $provider->getRequestStatus((string) $req['external_request_id']);
-
         $this->markSynced((int) $req['id'], $now);
 
-        $this->audit((int) $actorId, 'cv_status_synced', (int) $contractId, (int) $req['id'],
-            array('ok' => !empty($r['ok']), 'reason' => (string) $r['reason']));
-
-        if (empty($r['ok'])) {
-            return array('ok' => false, 'reason' => (string) $r['reason'],
-                         'message' => Contract_failures::operatorMessage((string) $r['reason']));
-        }
-
-        $applied = $this->applyState((int) $req['id'], (string) $r['state'], 'reconciliation', $actorId);
-
-        return array('ok' => true, 'reason' => 'synced',
-                     'message' => $applied['changed']
-                         ? 'Status updated to ' . $applied['to'] . '.'
-                         : 'Already up to date.');
+        return array('ok' => true, 'reason' => 'nothing_to_reconcile',
+                     'message' => 'Native signing has no external provider to check -- signer '
+                                . 'completion is recorded directly when each signer signs.');
     }
 
     /** Cancel a live request, with a stated reason. */
@@ -1923,40 +2789,20 @@ class Contract_verification_model extends App_Model
         }
 
         /*
-         * A request that was never sent exists only here.
-         *
-         * As first written, this method called the provider unconditionally and
-         * returned its refusal — which meant that while the adapter is blocked,
-         * NOTHING could be cancelled, including a request sitting in `created`
-         * that the provider has never heard of. Every request is in `created`
-         * today, so the cancel button was wired to a permanent refusal: the
-         * control existed, was reachable, held a capability, and could not
-         * work. That is the silent-no-op shape, with a visible error message
-         * in front of it.
-         *
-         * `external_request_id` is what says whether the provider has a copy.
-         * Without one there is nothing to withdraw remotely and the local
-         * record is cancelled on its own authority. With one, the provider is
-         * asked first and its refusal stands — cancelling locally while a
-         * signing link is still live would tell staff the request is dead while
-         * the customer can still sign it.
+         * Native signing has no provider to ask, so cancellation is always
+         * local: mark the request cancelled and revoke every outstanding
+         * signing token for it, so a link already emailed stops working the
+         * moment this runs rather than staying live until it expires on its
+         * own.
          */
-        $external = isset($req['external_request_id']) ? trim((string) $req['external_request_id']) : '';
-
-        if ($external !== '') {
-            $provider = new Leegality_provider(array());
-            $r        = $provider->cancelRequest($external, $reason);
-
-            if (empty($r['ok'])) {
-                $this->audit((int) $actorId, 'cv_cancel_attempted', (int) $contractId, (int) $req['id'],
-                    array('ok' => false, 'reason' => (string) $r['reason'], 'at_provider' => true));
-
-                return array('ok' => false, 'reason' => (string) $r['reason'],
-                             'message' => Contract_failures::operatorMessage((string) $r['reason'])
-                                        . ' The request is still live with the provider, so it has '
-                                        . 'NOT been cancelled here either.');
-            }
-        }
+        $this->db->where('contract_id', (int) $contractId)
+                 ->where('purpose', 'contract_signing')
+                 ->where('revoked_at', null)
+                 ->where('consumed_at', null)
+                 ->update($this->t('payplex_cv_invite_tokens'), array(
+                     'revoked_at'     => (int) $now,
+                     'revoked_reason' => Contract_invite_token::R_CANCELLED,
+                 ));
 
         $this->db->where('id', (int) $req['id'])
                  ->update($this->t('payplex_cv_requests'), array(
@@ -2151,7 +2997,7 @@ class Contract_verification_model extends App_Model
      * Crypto helpers
      * ============================================================== */
 
-    private function encrypt($plain)
+    protected function encrypt($plain)
     {
         if (!function_exists('get_instance')) { return null; }
 
@@ -2164,7 +3010,7 @@ class Contract_verification_model extends App_Model
         return ($out === false || $out === null || $out === '') ? null : $out;
     }
 
-    private function decrypt($cipher)
+    protected function decrypt($cipher)
     {
         if (!function_exists('get_instance')) { return null; }
 
@@ -2455,7 +3301,7 @@ class Contract_verification_model extends App_Model
         }
 
         /* 1. Approval and document lock. */
-        $request = $this->latestRequestForContract($contractId);
+        $request = $this->ensureDocumentLocked($this->latestRequestForContract($contractId));
 
         if (!$request) {
             $blockers[] = array('code' => 'not_prepared',
@@ -2472,42 +3318,31 @@ class Contract_verification_model extends App_Model
                            . 'to it could not be detected.');
         }
 
-        /* 2. The workflow profile. */
-        $profile = $this->profileForContract($contractId);
-
-        if (!$profile) {
-            $blockers[] = array('code' => 'no_profile_mapping',
-                'message' => 'No Leegality workflow is mapped for this contract. An administrator '
-                           . 'has to map one on the Workflow mapping screen.');
-        } else {
-            $environment = $this->setting('environment', 'sandbox');
-
-            if ((string) $profile['environment'] !== $environment) {
-                $blockers[] = array('code' => 'environment_mismatch',
-                    'message' => 'The mapped workflow belongs to the ' . $profile['environment']
-                               . ' environment and the module is configured for ' . $environment
-                               . '. A workflow ID from one account does not exist in the other.');
-            }
-
-            if ((int) $profile['validated_at'] <= 0) {
-                $blockers[] = array('code' => 'profile_not_validated',
-                    'message' => 'The mapped workflow has never been validated, so we do not know '
-                               . 'the provider accepts it.');
-            }
-        }
-
-        /* 3. The roster, against that profile. */
-        $signers = $this->activeSigners($contractId);
+        /*
+         * 2. The roster.
+         *
+         * Native signing has no external workflow to map against: every live
+         * signer gets their own independent link when Send is clicked, so
+         * the only requirement is that at least one live, mandatory signer
+         * exists. A reviewer is never sent an invite (see
+         * signerInviteeTypes()) and so does not count here.
+         */
+        $signers        = $this->activeSigners($contractId);
+        $signingSigners = array_values(array_filter($signers, function ($s) {
+            return (string) (isset($s['role']) ? $s['role'] : 'signer') !== 'reviewer';
+        }));
         $mapping = array();
+        $profile = null;
 
-        if ($profile) {
-            $m       = Contract_profile_map::mapRoster($profile, $signers);
-            $mapping = $m['mapping'];
-
-            foreach ($m['blockers'] as $b) { $blockers[] = $b; }
-        } elseif (count($signers) === 0) {
+        if (count($signingSigners) === 0) {
             $blockers[] = array('code' => 'no_signers',
                 'message' => 'There are no live signers on this contract.');
+        } elseif (count(array_filter($signingSigners, function ($s) {
+            return !empty($s['is_mandatory']);
+        })) === 0) {
+            $blockers[] = array('code' => 'no_mandatory_signer',
+                'message' => 'No signer on the roster is marked mandatory, so the contract could '
+                           . 'never be considered fully signed.');
         }
 
         /* 4. Authentication data each signer needs. */
@@ -2529,11 +3364,15 @@ class Contract_verification_model extends App_Model
         }
 
         /* 5. Every placed field must reference a signer who is still active. */
-        $version   = $request ? (int) $request['contract_version'] : 0;
+        $version   = $request ? (string) $request['contract_version'] : '';
         $fields    = $this->fields($contractId, $version);
         $liveRefs  = array();
 
         foreach ($signers as $s) { $liveRefs[] = (string) $s['email']; }
+
+        if ($request) {
+            foreach ($this->signers((int) $request['id']) as $s) { $liveRefs[] = (string) $s['reference']; }
+        }
 
         if (count($fields) === 0) {
             $blockers[] = array('code' => 'no_signature_fields',
@@ -2703,6 +3542,8 @@ class Contract_verification_model extends App_Model
                 'reference'       => (string) $s['email'],
                 'full_name'       => (string) $s['full_name'],
                 'email'           => (string) $s['email'],
+                'mobile_e164'     => (isset($s['mobile_e164']) && (string) $s['mobile_e164'] !== '')
+                                        ? (string) $s['mobile_e164'] : null,
                 'role'            => (string) $s['role'],
                 'signing_order'   => (int) $s['signing_order'],
                 'is_mandatory'    => (int) $s['is_mandatory'],
@@ -2712,9 +3553,8 @@ class Contract_verification_model extends App_Model
             );
 
             if ($this->db->field_exists('kyc_required', $table)) {
-                $row['kyc_required'] = !empty($s['kyc_required']) ? 1 : 0;
-                $row['kyc_state']    = !empty($s['kyc_required'])
-                    ? Contract_kyc::K_PENDING : Contract_kyc::K_NONE;
+                $row['kyc_required'] = 0;
+                $row['kyc_state']    = Contract_kyc::K_NONE;
             }
 
             $this->db->insert($table, $row);
